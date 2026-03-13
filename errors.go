@@ -1,0 +1,30 @@
+package xitdb
+
+import "errors"
+
+var (
+	ErrInvalidDatabase            = errors.New("invalid database")
+	ErrInvalidVersion             = errors.New("invalid version")
+	ErrInvalidHashSize            = errors.New("invalid hash size")
+	ErrKeyNotFound                = errors.New("key not found")
+	ErrWriteNotAllowed            = errors.New("write not allowed")
+	ErrUnexpectedTag              = errors.New("unexpected tag")
+	ErrCursorNotWriteable         = errors.New("cursor not writeable")
+	ErrExpectedTxStart            = errors.New("expected tx start")
+	ErrKeyOffsetExceeded          = errors.New("key offset exceeded")
+	ErrPathPartMustBeAtEnd        = errors.New("path part must be at end")
+	ErrStreamTooLong              = errors.New("stream too long")
+	ErrEndOfStream                = errors.New("end of stream")
+	ErrInvalidOffset              = errors.New("invalid offset")
+	ErrInvalidTopLevelType        = errors.New("invalid top level type")
+	ErrExpectedUnsignedLong       = errors.New("expected unsigned long")
+	ErrNoAvailableSlots           = errors.New("no available slots")
+	ErrMustSetNewSlotsToFull      = errors.New("must set new slots to full")
+	ErrEmptySlot                  = errors.New("empty slot")
+	ErrExpectedRootNode           = errors.New("expected root node")
+	ErrInvalidFormatTagSize       = errors.New("invalid format tag size")
+	ErrUnexpectedWriterPosition   = errors.New("unexpected writer position")
+	ErrMaxShiftExceeded           = errors.New("max shift exceeded")
+	ErrNotImplemented             = errors.New("not implemented")
+	ErrUnreachable                = errors.New("unreachable")
+)
