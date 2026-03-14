@@ -4,48 +4,60 @@ type WriteableData interface {
 	writeableData()
 }
 
-type UintData struct {
+type Uint struct {
 	Value uint64
 }
 
-func (UintData) writeableData() {}
+func (Uint) writeableData() {}
 
-type IntData struct {
+func NewUint(value uint64) Uint {
+	return Uint{Value: value}
+}
+
+type Int struct {
 	Value int64
 }
 
-func (IntData) writeableData() {}
+func (Int) writeableData() {}
 
-type FloatData struct {
+func NewInt(value int64) Int {
+	return Int{Value: value}
+}
+
+type Float struct {
 	Value float64
 }
 
-func (FloatData) writeableData() {}
+func (Float) writeableData() {}
 
-type BytesData struct {
+func NewFloat(value float64) Float {
+	return Float{Value: value}
+}
+
+type Bytes struct {
 	Value     []byte
 	FormatTag []byte
 }
 
-func (BytesData) writeableData() {}
+func (Bytes) writeableData() {}
 
-func NewBytesData(value []byte) BytesData {
-	return BytesData{Value: value}
+func NewBytes(value []byte) Bytes {
+	return Bytes{Value: value}
 }
 
-func NewBytesDataWithFormat(value []byte, formatTag []byte) BytesData {
-	return BytesData{Value: value, FormatTag: formatTag}
+func NewTaggedBytes(value []byte, formatTag []byte) Bytes {
+	return Bytes{Value: value, FormatTag: formatTag}
 }
 
-func NewBytesDataFromString(value string) BytesData {
-	return BytesData{Value: []byte(value)}
+func NewString(value string) Bytes {
+	return Bytes{Value: []byte(value)}
 }
 
-func NewBytesDataFromStringWithFormat(value string, formatTag string) BytesData {
-	return BytesData{Value: []byte(value), FormatTag: []byte(formatTag)}
+func NewTaggedString(value string, formatTag string) Bytes {
+	return Bytes{Value: []byte(value), FormatTag: []byte(formatTag)}
 }
 
-func (b BytesData) IsShort() bool {
+func (b Bytes) IsShort() bool {
 	totalSize := 8
 	if b.FormatTag != nil {
 		totalSize = 6

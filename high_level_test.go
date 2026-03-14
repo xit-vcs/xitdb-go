@@ -75,16 +75,16 @@ func TestNotUsingArrayListAtTopLevel(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := m.PutString("foo", NewBytesDataFromString("foo")); err != nil {
+		if err := m.Put("foo", NewString("foo")); err != nil {
 			t.Fatal(err)
 		}
-		if err := m.PutString("bar", NewBytesDataFromString("bar")); err != nil {
+		if err := m.Put("bar", NewString("bar")); err != nil {
 			t.Fatal(err)
 		}
 
 		// init inner map
 		{
-			innerMapCursor, err := m.PutCursorByString("inner-map")
+			innerMapCursor, err := m.PutCursor("inner-map")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -95,7 +95,7 @@ func TestNotUsingArrayListAtTopLevel(t *testing.T) {
 
 		// re-init inner map
 		{
-			innerMapCursor, err := m.PutCursorByString("inner-map")
+			innerMapCursor, err := m.PutCursor("inner-map")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -150,7 +150,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fooCursor, err := moment.GetCursorByString("foo")
+		fooCursor, err := moment.GetCursor("foo")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -160,18 +160,18 @@ func TestReadDatabaseFromResources(t *testing.T) {
 		}
 		assertEqual(t, "foo", string(fooValue))
 
-		fooSlot, err := moment.GetSlotByString("foo")
+		fooSlot, err := moment.GetSlot("foo")
 		if err != nil {
 			t.Fatal(err)
 		}
 		assertEqual(t, TagShortBytes, fooSlot.Tag)
-		barSlot, err := moment.GetSlotByString("bar")
+		barSlot, err := moment.GetSlot("bar")
 		if err != nil {
 			t.Fatal(err)
 		}
 		assertEqual(t, TagShortBytes, barSlot.Tag)
 
-		fruitsCursor, err := moment.GetCursorByString("fruits")
+		fruitsCursor, err := moment.GetCursor("fruits")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -195,7 +195,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 		}
 		assertEqual(t, "apple", string(appleValue))
 
-		peopleCursor, err := moment.GetCursorByString("people")
+		peopleCursor, err := moment.GetCursor("people")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -217,7 +217,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		aliceAgeCursor, err := alice.GetCursorByString("age")
+		aliceAgeCursor, err := alice.GetCursor("age")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -227,7 +227,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 		}
 		assertEqual(t, uint64(25), aliceAge)
 
-		todosCursor, err := moment.GetCursorByString("todos")
+		todosCursor, err := moment.GetCursor("todos")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -273,7 +273,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 
 		// counted hash map
 		{
-			lcmCursor, err := moment.GetCursorByString("letters-counted-map")
+			lcmCursor, err := moment.GetCursor("letters-counted-map")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -307,7 +307,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 
 		// hash set
 		{
-			lsCursor, err := moment.GetCursorByString("letters-set")
+			lsCursor, err := moment.GetCursor("letters-set")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -315,14 +315,14 @@ func TestReadDatabaseFromResources(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			aCursor, err := ls.GetCursorByString("a")
+			aCursor, err := ls.GetCursor("a")
 			if err != nil {
 				t.Fatal(err)
 			}
 			if aCursor == nil {
 				t.Fatal("expected non-nil cursor for 'a'")
 			}
-			cCursor, err := ls.GetCursorByString("c")
+			cCursor, err := ls.GetCursor("c")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -350,7 +350,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 
 		// counted hash set
 		{
-			lcsCursor, err := moment.GetCursorByString("letters-counted-set")
+			lcsCursor, err := moment.GetCursor("letters-counted-set")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -394,7 +394,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		barCursor, err := moment.GetCursorByString("bar")
+		barCursor, err := moment.GetCursor("bar")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -402,7 +402,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 			t.Fatal("expected nil cursor for 'bar'")
 		}
 
-		fruitsKeyCursor, err := moment.GetKeyCursorByString("fruits")
+		fruitsKeyCursor, err := moment.GetKeyCursor("fruits")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -412,7 +412,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 		}
 		assertEqual(t, "fruits", string(fruitsKeyValue))
 
-		fruitsCursor, err := moment.GetCursorByString("fruits")
+		fruitsCursor, err := moment.GetCursor("fruits")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -426,7 +426,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 		}
 		assertEqual(t, int64(2), fruitsCount)
 
-		fruitsKV, err := moment.GetKeyValuePairByString("fruits")
+		fruitsKV, err := moment.GetKeyValuePair("fruits")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -443,7 +443,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 		}
 		assertEqual(t, "lemon", string(lemonValue))
 
-		peopleCursor, err := moment.GetCursorByString("people")
+		peopleCursor, err := moment.GetCursor("people")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -465,7 +465,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		aliceAgeCursor, err := alice.GetCursorByString("age")
+		aliceAgeCursor, err := alice.GetCursor("age")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -475,7 +475,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 		}
 		assertEqual(t, uint64(26), aliceAge)
 
-		todosCursor, err := moment.GetCursorByString("todos")
+		todosCursor, err := moment.GetCursor("todos")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -499,7 +499,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 		}
 		assertEqual(t, "Wash the car", string(todoValue))
 
-		lcmCursor, err := moment.GetCursorByString("letters-counted-map")
+		lcmCursor, err := moment.GetCursor("letters-counted-map")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -513,7 +513,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 		}
 		assertEqual(t, int64(1), lcmCount)
 
-		lsCursor, err := moment.GetCursorByString("letters-set")
+		lsCursor, err := moment.GetCursor("letters-set")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -521,14 +521,14 @@ func TestReadDatabaseFromResources(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		aCursor, err := ls.GetCursorByString("a")
+		aCursor, err := ls.GetCursor("a")
 		if err != nil {
 			t.Fatal(err)
 		}
 		if aCursor == nil {
 			t.Fatal("expected non-nil cursor for 'a'")
 		}
-		cCursor, err := ls.GetCursorByString("c")
+		cCursor, err := ls.GetCursor("c")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -536,7 +536,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 			t.Fatal("expected nil cursor for 'c'")
 		}
 
-		lcsCursor, err := moment.GetCursorByString("letters-counted-set")
+		lcsCursor, err := moment.GetCursor("letters-counted-set")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -611,7 +611,7 @@ func TestMultithreading(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		fooCursor, err := m.GetCursorByString("foo")
+		fooCursor, err := m.GetCursor("foo")
 		if err != nil {
 			t.Error(err)
 			return
@@ -638,7 +638,7 @@ func TestMultithreading(t *testing.T) {
 	}()
 
 	// this should succeed because the goroutines use their own file handles
-	fooCursor, err := moment.GetCursorByString("foo")
+	fooCursor, err := moment.GetCursor("foo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -672,7 +672,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			t.Fatal(err)
 		}
 
-		lastSlot, err := history.GetSlotAt(-1)
+		lastSlot, err := history.GetSlot(-1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -687,14 +687,14 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 				return err
 			}
 
-			if err := moment.PutString("foo", NewBytesDataFromString("foo")); err != nil {
+			if err := moment.Put("foo", NewString("foo")); err != nil {
 				return err
 			}
-			if err := moment.PutString("bar", NewBytesDataFromString("bar")); err != nil {
+			if err := moment.Put("bar", NewString("bar")); err != nil {
 				return err
 			}
 
-			fruitsCursor, err := moment.PutCursorByString("fruits")
+			fruitsCursor, err := moment.PutCursor("fruits")
 			if err != nil {
 				return err
 			}
@@ -702,17 +702,17 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				return err
 			}
-			if err := fruits.Append(NewBytesDataFromString("apple")); err != nil {
+			if err := fruits.Append(NewString("apple")); err != nil {
 				return err
 			}
-			if err := fruits.Append(NewBytesDataFromString("pear")); err != nil {
+			if err := fruits.Append(NewString("pear")); err != nil {
 				return err
 			}
-			if err := fruits.Append(NewBytesDataFromString("grape")); err != nil {
+			if err := fruits.Append(NewString("grape")); err != nil {
 				return err
 			}
 
-			peopleCursor, err := moment.PutCursorByString("people")
+			peopleCursor, err := moment.PutCursor("people")
 			if err != nil {
 				return err
 			}
@@ -729,10 +729,10 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				return err
 			}
-			if err := alice.PutString("name", NewBytesDataFromString("Alice")); err != nil {
+			if err := alice.Put("name", NewString("Alice")); err != nil {
 				return err
 			}
-			if err := alice.PutString("age", UintData{Value: 25}); err != nil {
+			if err := alice.Put("age", NewUint(25)); err != nil {
 				return err
 			}
 
@@ -744,14 +744,14 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				return err
 			}
-			if err := bob.PutString("name", NewBytesDataFromString("Bob")); err != nil {
+			if err := bob.Put("name", NewString("Bob")); err != nil {
 				return err
 			}
-			if err := bob.PutString("age", UintData{Value: 42}); err != nil {
+			if err := bob.Put("age", NewUint(42)); err != nil {
 				return err
 			}
 
-			todosCursor, err := moment.PutCursorByString("todos")
+			todosCursor, err := moment.PutCursor("todos")
 			if err != nil {
 				return err
 			}
@@ -759,13 +759,13 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				return err
 			}
-			if err := todos.Append(NewBytesDataFromString("Pay the bills")); err != nil {
+			if err := todos.Append(NewString("Pay the bills")); err != nil {
 				return err
 			}
-			if err := todos.Append(NewBytesDataFromString("Get an oil change")); err != nil {
+			if err := todos.Append(NewString("Get an oil change")); err != nil {
 				return err
 			}
-			if err := todos.Insert(1, NewBytesDataFromString("Wash the car")); err != nil {
+			if err := todos.Insert(1, NewString("Wash the car")); err != nil {
 				return err
 			}
 
@@ -781,7 +781,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 				return err
 			}
 
-			lcmCursor, err := moment.PutCursorByString("letters-counted-map")
+			lcmCursor, err := moment.PutCursor("letters-counted-map")
 			if err != nil {
 				return err
 			}
@@ -789,17 +789,17 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				return err
 			}
-			if err := lcm.PutString("a", UintData{Value: 1}); err != nil {
+			if err := lcm.Put("a", NewUint(1)); err != nil {
 				return err
 			}
-			if err := lcm.PutString("a", UintData{Value: 2}); err != nil {
+			if err := lcm.Put("a", NewUint(2)); err != nil {
 				return err
 			}
-			if err := lcm.PutString("c", UintData{Value: 2}); err != nil {
+			if err := lcm.Put("c", NewUint(2)); err != nil {
 				return err
 			}
 
-			lsCursor, err := moment.PutCursorByString("letters-set")
+			lsCursor, err := moment.PutCursor("letters-set")
 			if err != nil {
 				return err
 			}
@@ -807,17 +807,17 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				return err
 			}
-			if err := ls.PutString("a"); err != nil {
+			if err := ls.Put("a"); err != nil {
 				return err
 			}
-			if err := ls.PutString("a"); err != nil {
+			if err := ls.Put("a"); err != nil {
 				return err
 			}
-			if err := ls.PutString("c"); err != nil {
+			if err := ls.Put("c"); err != nil {
 				return err
 			}
 
-			lcsCursor, err := moment.PutCursorByString("letters-counted-set")
+			lcsCursor, err := moment.PutCursor("letters-counted-set")
 			if err != nil {
 				return err
 			}
@@ -825,22 +825,22 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				return err
 			}
-			if err := lcs.PutString("a"); err != nil {
+			if err := lcs.Put("a"); err != nil {
 				return err
 			}
-			if err := lcs.PutString("a"); err != nil {
+			if err := lcs.Put("a"); err != nil {
 				return err
 			}
-			if err := lcs.PutString("c"); err != nil {
+			if err := lcs.Put("c"); err != nil {
 				return err
 			}
 
 			randomBytes := bytes.Repeat([]byte{0xAB}, 32)
-			if err := moment.PutString("random-number", NewBytesDataWithFormat(randomBytes, []byte("bi"))); err != nil {
+			if err := moment.Put("random-number", NewTaggedBytes(randomBytes, []byte("bi"))); err != nil {
 				return err
 			}
 
-			longTextCursor, err := moment.PutCursorByString("long-text")
+			longTextCursor, err := moment.PutCursor("long-text")
 			if err != nil {
 				return err
 			}
@@ -877,7 +877,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			t.Fatal(err)
 		}
 
-		fooCursor, err := moment.GetCursorByString("foo")
+		fooCursor, err := moment.GetCursor("foo")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -887,18 +887,18 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		}
 		assertEqual(t, "foo", string(fooValue))
 
-		fooSlot, err := moment.GetSlotByString("foo")
+		fooSlot, err := moment.GetSlot("foo")
 		if err != nil {
 			t.Fatal(err)
 		}
 		assertEqual(t, TagShortBytes, fooSlot.Tag)
-		barSlot, err := moment.GetSlotByString("bar")
+		barSlot, err := moment.GetSlot("bar")
 		if err != nil {
 			t.Fatal(err)
 		}
 		assertEqual(t, TagShortBytes, barSlot.Tag)
 
-		fruitsCursor, err := moment.GetCursorByString("fruits")
+		fruitsCursor, err := moment.GetCursor("fruits")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -922,7 +922,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		}
 		assertEqual(t, "apple", string(appleValue))
 
-		peopleCursor, err := moment.GetCursorByString("people")
+		peopleCursor, err := moment.GetCursor("people")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -944,7 +944,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		if err != nil {
 			t.Fatal(err)
 		}
-		aliceAgeCursor, err := alice.GetCursorByString("age")
+		aliceAgeCursor, err := alice.GetCursor("age")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -954,7 +954,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		}
 		assertEqual(t, uint64(25), aliceAge)
 
-		todosCursor, err := moment.GetCursorByString("todos")
+		todosCursor, err := moment.GetCursor("todos")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1026,7 +1026,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 
 		// counted hash map
 		{
-			lcmCursor, err := moment.GetCursorByString("letters-counted-map")
+			lcmCursor, err := moment.GetCursor("letters-counted-map")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1060,7 +1060,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 
 		// hash set
 		{
-			lsCursor, err := moment.GetCursorByString("letters-set")
+			lsCursor, err := moment.GetCursor("letters-set")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1068,14 +1068,14 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				t.Fatal(err)
 			}
-			aCursor, err := ls.GetCursorByString("a")
+			aCursor, err := ls.GetCursor("a")
 			if err != nil {
 				t.Fatal(err)
 			}
 			if aCursor == nil {
 				t.Fatal("expected non-nil cursor for 'a'")
 			}
-			cCursor, err := ls.GetCursorByString("c")
+			cCursor, err := ls.GetCursor("c")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1103,7 +1103,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 
 		// counted hash set
 		{
-			lcsCursor, err := moment.GetCursorByString("letters-counted-set")
+			lcsCursor, err := moment.GetCursor("letters-counted-set")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1137,7 +1137,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 
 		// random number format tag
 		{
-			rnCursor, err := moment.GetCursorByString("random-number")
+			rnCursor, err := moment.GetCursor("random-number")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1150,7 +1150,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 
 		// long text with reader
 		{
-			ltCursor, err := moment.GetCursorByString("long-text")
+			ltCursor, err := moment.GetCursor("long-text")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1181,7 +1181,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			t.Fatal(err)
 		}
 
-		lastSlot, err := history.GetSlotAt(-1)
+		lastSlot, err := history.GetSlot(-1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1196,14 +1196,14 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 				return err
 			}
 
-			removed, err := moment.RemoveByString("bar")
+			removed, err := moment.Remove("bar")
 			if err != nil {
 				return err
 			}
 			if !removed {
 				t.Fatal("expected bar to be removed")
 			}
-			removed, err = moment.RemoveByString("doesn't exist")
+			removed, err = moment.Remove("doesn't exist")
 			if err != nil {
 				return err
 			}
@@ -1211,7 +1211,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 				t.Fatal("expected not found")
 			}
 
-			fruitsCursor, err := moment.PutCursorByString("fruits")
+			fruitsCursor, err := moment.PutCursor("fruits")
 			if err != nil {
 				return err
 			}
@@ -1219,14 +1219,14 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				return err
 			}
-			if err := fruits.Put(0, NewBytesDataFromString("lemon")); err != nil {
+			if err := fruits.Put(0, NewString("lemon")); err != nil {
 				return err
 			}
 			if err := fruits.Slice(2); err != nil {
 				return err
 			}
 
-			peopleCursor, err := moment.PutCursorByString("people")
+			peopleCursor, err := moment.PutCursor("people")
 			if err != nil {
 				return err
 			}
@@ -1243,11 +1243,11 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				return err
 			}
-			if err := alice.PutString("age", UintData{Value: 26}); err != nil {
+			if err := alice.Put("age", NewUint(26)); err != nil {
 				return err
 			}
 
-			todosCursor, err := moment.PutCursorByString("todos")
+			todosCursor, err := moment.PutCursor("todos")
 			if err != nil {
 				return err
 			}
@@ -1255,7 +1255,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				return err
 			}
-			if err := todos.Concat(todosCursor.GetSlot()); err != nil {
+			if err := todos.Concat(todosCursor.Slot()); err != nil {
 				return err
 			}
 			if err := todos.Slice(1, 2); err != nil {
@@ -1265,7 +1265,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 				return err
 			}
 
-			lcmCursor, err := moment.PutCursorByString("letters-counted-map")
+			lcmCursor, err := moment.PutCursor("letters-counted-map")
 			if err != nil {
 				return err
 			}
@@ -1273,10 +1273,10 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				return err
 			}
-			lcm.RemoveByString("b")
-			lcm.RemoveByString("c")
+			lcm.Remove("b")
+			lcm.Remove("c")
 
-			lsCursor, err := moment.PutCursorByString("letters-set")
+			lsCursor, err := moment.PutCursor("letters-set")
 			if err != nil {
 				return err
 			}
@@ -1284,10 +1284,10 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				return err
 			}
-			ls.RemoveByString("b")
-			ls.RemoveByString("c")
+			ls.Remove("b")
+			ls.Remove("c")
 
-			lcsCursor, err := moment.PutCursorByString("letters-counted-set")
+			lcsCursor, err := moment.PutCursor("letters-counted-set")
 			if err != nil {
 				return err
 			}
@@ -1295,8 +1295,8 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				return err
 			}
-			lcs.RemoveByString("b")
-			lcs.RemoveByString("c")
+			lcs.Remove("b")
+			lcs.Remove("c")
 
 			return nil
 		})
@@ -1314,7 +1314,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			t.Fatal(err)
 		}
 
-		barCursor, err := moment.GetCursorByString("bar")
+		barCursor, err := moment.GetCursor("bar")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1322,7 +1322,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			t.Fatal("expected nil cursor for 'bar'")
 		}
 
-		fruitsKeyCursor, err := moment.GetKeyCursorByString("fruits")
+		fruitsKeyCursor, err := moment.GetKeyCursor("fruits")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1332,7 +1332,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		}
 		assertEqual(t, "fruits", string(fruitsKeyValue))
 
-		fruitsCursor, err := moment.GetCursorByString("fruits")
+		fruitsCursor, err := moment.GetCursor("fruits")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1346,7 +1346,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		}
 		assertEqual(t, int64(2), fruitsCount)
 
-		fruitsKV, err := moment.GetKeyValuePairByString("fruits")
+		fruitsKV, err := moment.GetKeyValuePair("fruits")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1363,7 +1363,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		}
 		assertEqual(t, "lemon", string(lemonValue))
 
-		peopleCursor, err := moment.GetCursorByString("people")
+		peopleCursor, err := moment.GetCursor("people")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1385,7 +1385,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		if err != nil {
 			t.Fatal(err)
 		}
-		aliceAgeCursor, err := alice.GetCursorByString("age")
+		aliceAgeCursor, err := alice.GetCursor("age")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1395,7 +1395,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		}
 		assertEqual(t, uint64(26), aliceAge)
 
-		todosCursor, err := moment.GetCursorByString("todos")
+		todosCursor, err := moment.GetCursor("todos")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1419,7 +1419,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		}
 		assertEqual(t, "Wash the car", string(todoValue))
 
-		lcmCursor, err := moment.GetCursorByString("letters-counted-map")
+		lcmCursor, err := moment.GetCursor("letters-counted-map")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1433,7 +1433,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		}
 		assertEqual(t, int64(1), lcmCount)
 
-		lsCursor, err := moment.GetCursorByString("letters-set")
+		lsCursor, err := moment.GetCursor("letters-set")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1441,14 +1441,14 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		if err != nil {
 			t.Fatal(err)
 		}
-		aCursor, err := ls.GetCursorByString("a")
+		aCursor, err := ls.GetCursor("a")
 		if err != nil {
 			t.Fatal(err)
 		}
 		if aCursor == nil {
 			t.Fatal("expected non-nil cursor for 'a'")
 		}
-		cCursor, err := ls.GetCursorByString("c")
+		cCursor, err := ls.GetCursor("c")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1456,7 +1456,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			t.Fatal("expected nil cursor for 'c'")
 		}
 
-		lcsCursor, err := moment.GetCursorByString("letters-counted-set")
+		lcsCursor, err := moment.GetCursor("letters-counted-set")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1487,7 +1487,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			t.Fatal(err)
 		}
 
-		fooCursor, err := moment.GetCursorByString("foo")
+		fooCursor, err := moment.GetCursor("foo")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1497,18 +1497,18 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		}
 		assertEqual(t, "foo", string(fooValue))
 
-		fooSlot, err := moment.GetSlotByString("foo")
+		fooSlot, err := moment.GetSlot("foo")
 		if err != nil {
 			t.Fatal(err)
 		}
 		assertEqual(t, TagShortBytes, fooSlot.Tag)
-		barSlot, err := moment.GetSlotByString("bar")
+		barSlot, err := moment.GetSlot("bar")
 		if err != nil {
 			t.Fatal(err)
 		}
 		assertEqual(t, TagShortBytes, barSlot.Tag)
 
-		fruitsCursor, err := moment.GetCursorByString("fruits")
+		fruitsCursor, err := moment.GetCursor("fruits")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1532,7 +1532,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		}
 		assertEqual(t, "apple", string(appleValue))
 
-		peopleCursor, err := moment.GetCursorByString("people")
+		peopleCursor, err := moment.GetCursor("people")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1554,7 +1554,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		if err != nil {
 			t.Fatal(err)
 		}
-		aliceAgeCursor, err := alice.GetCursorByString("age")
+		aliceAgeCursor, err := alice.GetCursor("age")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1564,7 +1564,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		}
 		assertEqual(t, uint64(25), aliceAge)
 
-		todosCursor, err := moment.GetCursorByString("todos")
+		todosCursor, err := moment.GetCursor("todos")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1609,7 +1609,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			t.Fatal(err)
 		}
 
-		fooCursor, err := moment.GetCursorByString("foo")
+		fooCursor, err := moment.GetCursor("foo")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1671,7 +1671,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			t.Fatal(err)
 		}
 
-		lastSlot, err := history.GetSlotAt(-1)
+		lastSlot, err := history.GetSlot(-1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1686,7 +1686,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 				return err
 			}
 
-			fruitsCursor, err := moment.GetCursorByString("fruits")
+			fruitsCursor, err := moment.GetCursor("fruits")
 			if err != nil {
 				return err
 			}
@@ -1695,11 +1695,11 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 				return err
 			}
 
-			foodCursor, err := moment.PutCursorByString("food")
+			foodCursor, err := moment.PutCursor("food")
 			if err != nil {
 				return err
 			}
-			if err := foodCursor.WriteValue(fruits.GetSlot()); err != nil {
+			if err := foodCursor.WriteValue(fruits.Slot()); err != nil {
 				return err
 			}
 
@@ -1707,13 +1707,13 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				return err
 			}
-			if err := food.Append(NewBytesDataFromString("eggs")); err != nil {
+			if err := food.Append(NewString("eggs")); err != nil {
 				return err
 			}
-			if err := food.Append(NewBytesDataFromString("rice")); err != nil {
+			if err := food.Append(NewString("rice")); err != nil {
 				return err
 			}
-			if err := food.Append(NewBytesDataFromString("fish")); err != nil {
+			if err := food.Append(NewString("fish")); err != nil {
 				return err
 			}
 			return nil
@@ -1731,7 +1731,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			t.Fatal(err)
 		}
 
-		foodCursor, err := moment.GetCursorByString("food")
+		foodCursor, err := moment.GetCursor("food")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1745,7 +1745,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		}
 		assertEqual(t, int64(6), foodCount)
 
-		fruitsCursor, err := moment.GetCursorByString("fruits")
+		fruitsCursor, err := moment.GetCursor("fruits")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1773,7 +1773,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		}
 		historyIndex := historyCount - 1
 
-		lastSlot, err := history.GetSlotAt(-1)
+		lastSlot, err := history.GetSlot(-1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1788,7 +1788,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 				return err
 			}
 
-			bigCitiesCursor, err := moment.PutCursorByString("big-cities")
+			bigCitiesCursor, err := moment.PutCursor("big-cities")
 			if err != nil {
 				return err
 			}
@@ -1796,18 +1796,18 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				return err
 			}
-			if err := bigCities.Append(NewBytesDataFromString("New York, NY")); err != nil {
+			if err := bigCities.Append(NewString("New York, NY")); err != nil {
 				return err
 			}
-			if err := bigCities.Append(NewBytesDataFromString("Los Angeles, CA")); err != nil {
+			if err := bigCities.Append(NewString("Los Angeles, CA")); err != nil {
 				return err
 			}
 
-			citiesCursor, err := moment.PutCursorByString("cities")
+			citiesCursor, err := moment.PutCursor("cities")
 			if err != nil {
 				return err
 			}
-			if err := citiesCursor.WriteValue(bigCities.GetSlot()); err != nil {
+			if err := citiesCursor.WriteValue(bigCities.Slot()); err != nil {
 				return err
 			}
 
@@ -1815,10 +1815,10 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				return err
 			}
-			if err := cities.Append(NewBytesDataFromString("Charleston, SC")); err != nil {
+			if err := cities.Append(NewString("Charleston, SC")); err != nil {
 				return err
 			}
-			if err := cities.Append(NewBytesDataFromString("Louisville, KY")); err != nil {
+			if err := cities.Append(NewString("Louisville, KY")); err != nil {
 				return err
 			}
 			return nil
@@ -1836,7 +1836,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			t.Fatal(err)
 		}
 
-		citiesCursor, err := moment.GetCursorByString("cities")
+		citiesCursor, err := moment.GetCursor("cities")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1851,7 +1851,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		assertEqual(t, int64(4), citiesCount)
 
 		// big-cities also got mutated (accidental)
-		bigCitiesCursor, err := moment.GetCursorByString("big-cities")
+		bigCitiesCursor, err := moment.GetCursor("big-cities")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1866,7 +1866,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		assertEqual(t, int64(4), bigCitiesCount)
 
 		// revert
-		histSlot, err := history.GetSlotAt(historyIndex)
+		histSlot, err := history.GetSlot(historyIndex)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1882,7 +1882,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			t.Fatal(err)
 		}
 
-		lastSlot, err := history.GetSlotAt(-1)
+		lastSlot, err := history.GetSlot(-1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1897,7 +1897,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 				return err
 			}
 
-			bigCitiesCursor, err := moment.PutCursorByString("big-cities")
+			bigCitiesCursor, err := moment.PutCursor("big-cities")
 			if err != nil {
 				return err
 			}
@@ -1905,10 +1905,10 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				return err
 			}
-			if err := bigCities.Append(NewBytesDataFromString("New York, NY")); err != nil {
+			if err := bigCities.Append(NewString("New York, NY")); err != nil {
 				return err
 			}
-			if err := bigCities.Append(NewBytesDataFromString("Los Angeles, CA")); err != nil {
+			if err := bigCities.Append(NewString("Los Angeles, CA")); err != nil {
 				return err
 			}
 
@@ -1917,11 +1917,11 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 				return err
 			}
 
-			citiesCursor, err := moment.PutCursorByString("cities")
+			citiesCursor, err := moment.PutCursor("cities")
 			if err != nil {
 				return err
 			}
-			if err := citiesCursor.WriteValue(bigCities.GetSlot()); err != nil {
+			if err := citiesCursor.WriteValue(bigCities.Slot()); err != nil {
 				return err
 			}
 
@@ -1929,10 +1929,10 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				return err
 			}
-			if err := cities.Append(NewBytesDataFromString("Charleston, SC")); err != nil {
+			if err := cities.Append(NewString("Charleston, SC")); err != nil {
 				return err
 			}
-			if err := cities.Append(NewBytesDataFromString("Louisville, KY")); err != nil {
+			if err := cities.Append(NewString("Louisville, KY")); err != nil {
 				return err
 			}
 			return nil
@@ -1950,7 +1950,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			t.Fatal(err)
 		}
 
-		citiesCursor, err := moment.GetCursorByString("cities")
+		citiesCursor, err := moment.GetCursor("cities")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1964,7 +1964,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		}
 		assertEqual(t, int64(4), citiesCount)
 
-		bigCitiesCursor, err := moment.GetCursorByString("big-cities")
+		bigCitiesCursor, err := moment.GetCursor("big-cities")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2067,7 +2067,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			if err != nil {
 				t.Fatal(err)
 			}
-			lastSlot, err := history.GetSlotAt(-1)
+			lastSlot, err := history.GetSlot(-1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2080,10 +2080,10 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				if err != nil {
 					return err
 				}
-				if err := moment.PutString("key1", NewBytesDataFromString("value1")); err != nil {
+				if err := moment.Put("key1", NewString("value1")); err != nil {
 					return err
 				}
-				if err := moment.PutString("key2", UintData{Value: 100}); err != nil {
+				if err := moment.Put("key2", NewUint(100)); err != nil {
 					return err
 				}
 				return nil
@@ -2099,7 +2099,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			if err != nil {
 				t.Fatal(err)
 			}
-			lastSlot, err := history.GetSlotAt(-1)
+			lastSlot, err := history.GetSlot(-1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2112,26 +2112,26 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				if err != nil {
 					return err
 				}
-				if err := moment.PutString("key1", NewBytesDataFromString("updated_value1")); err != nil {
+				if err := moment.Put("key1", NewString("updated_value1")); err != nil {
 					return err
 				}
-				if err := moment.PutString("key2", UintData{Value: 200}); err != nil {
+				if err := moment.Put("key2", NewUint(200)); err != nil {
 					return err
 				}
-				if err := moment.PutString("key3", IntData{Value: -42}); err != nil {
+				if err := moment.Put("key3", NewInt(-42)); err != nil {
 					return err
 				}
-				if err := moment.PutString("key4", FloatData{Value: 3.14}); err != nil {
+				if err := moment.Put("key4", NewFloat(3.14)); err != nil {
 					return err
 				}
-				if err := moment.PutString("short", NewBytesDataFromString("hi")); err != nil {
+				if err := moment.Put("short", NewString("hi")); err != nil {
 					return err
 				}
-				if err := moment.PutString("tagged", NewBytesDataFromStringWithFormat("this is a long tagged string!!", "bi")); err != nil {
+				if err := moment.Put("tagged", NewTaggedString("this is a long tagged string!!", "bi")); err != nil {
 					return err
 				}
 
-				fruitsCursor, err := moment.PutCursorByString("fruits")
+				fruitsCursor, err := moment.PutCursor("fruits")
 				if err != nil {
 					return err
 				}
@@ -2139,17 +2139,17 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				if err != nil {
 					return err
 				}
-				if err := fruits.Append(NewBytesDataFromString("apple")); err != nil {
+				if err := fruits.Append(NewString("apple")); err != nil {
 					return err
 				}
-				if err := fruits.Append(NewBytesDataFromString("banana")); err != nil {
+				if err := fruits.Append(NewString("banana")); err != nil {
 					return err
 				}
-				if err := fruits.Append(NewBytesDataFromString("cherry")); err != nil {
+				if err := fruits.Append(NewString("cherry")); err != nil {
 					return err
 				}
 
-				todosCursor, err := moment.PutCursorByString("todos")
+				todosCursor, err := moment.PutCursor("todos")
 				if err != nil {
 					return err
 				}
@@ -2157,17 +2157,17 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				if err != nil {
 					return err
 				}
-				if err := todos.Append(NewBytesDataFromString("task1")); err != nil {
+				if err := todos.Append(NewString("task1")); err != nil {
 					return err
 				}
-				if err := todos.Append(NewBytesDataFromString("task2")); err != nil {
+				if err := todos.Append(NewString("task2")); err != nil {
 					return err
 				}
-				if err := todos.Append(NewBytesDataFromString("task3")); err != nil {
+				if err := todos.Append(NewString("task3")); err != nil {
 					return err
 				}
 
-				countedCursor, err := moment.PutCursorByString("counted")
+				countedCursor, err := moment.PutCursor("counted")
 				if err != nil {
 					return err
 				}
@@ -2175,20 +2175,20 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				if err != nil {
 					return err
 				}
-				if err := counted.PutString("a", UintData{Value: 1}); err != nil {
+				if err := counted.Put("a", NewUint(1)); err != nil {
 					return err
 				}
-				if err := counted.PutKeyByString("a", NewBytesDataFromString("a")); err != nil {
+				if err := counted.PutKey("a", NewString("a")); err != nil {
 					return err
 				}
-				if err := counted.PutString("b", UintData{Value: 2}); err != nil {
+				if err := counted.Put("b", NewUint(2)); err != nil {
 					return err
 				}
-				if err := counted.PutKeyByString("b", NewBytesDataFromString("b")); err != nil {
+				if err := counted.PutKey("b", NewString("b")); err != nil {
 					return err
 				}
 
-				setCursor, err := moment.PutCursorByString("myset")
+				setCursor, err := moment.PutCursor("myset")
 				if err != nil {
 					return err
 				}
@@ -2196,14 +2196,14 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				if err != nil {
 					return err
 				}
-				if err := set.PutString("x"); err != nil {
+				if err := set.Put("x"); err != nil {
 					return err
 				}
-				if err := set.PutString("y"); err != nil {
+				if err := set.Put("y"); err != nil {
 					return err
 				}
 
-				csetCursor, err := moment.PutCursorByString("mycset")
+				csetCursor, err := moment.PutCursor("mycset")
 				if err != nil {
 					return err
 				}
@@ -2211,10 +2211,10 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				if err != nil {
 					return err
 				}
-				if err := cset.PutString("p"); err != nil {
+				if err := cset.Put("p"); err != nil {
 					return err
 				}
-				if err := cset.PutString("q"); err != nil {
+				if err := cset.Put("q"); err != nil {
 					return err
 				}
 
@@ -2231,7 +2231,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			if err != nil {
 				t.Fatal(err)
 			}
-			lastSlot, err := history.GetSlotAt(-1)
+			lastSlot, err := history.GetSlot(-1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2244,7 +2244,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				if err != nil {
 					return err
 				}
-				return moment.PutString("key1", NewBytesDataFromString("final_value"))
+				return moment.Put("key1", NewString("final_value"))
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -2288,7 +2288,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			t.Fatal(err)
 		}
 
-		key1Cursor, err := moment.GetCursorByString("key1")
+		key1Cursor, err := moment.GetCursor("key1")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2298,7 +2298,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 		}
 		assertEqual(t, "final_value", string(key1Value))
 
-		key2Cursor, err := moment.GetCursorByString("key2")
+		key2Cursor, err := moment.GetCursor("key2")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2308,7 +2308,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 		}
 		assertEqual(t, uint64(200), key2Value)
 
-		key3Cursor, err := moment.GetCursorByString("key3")
+		key3Cursor, err := moment.GetCursor("key3")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2318,7 +2318,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 		}
 		assertEqual(t, int64(-42), key3Value)
 
-		key4Cursor, err := moment.GetCursorByString("key4")
+		key4Cursor, err := moment.GetCursor("key4")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2328,7 +2328,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 		}
 		assertEqual(t, 3.14, key4Value)
 
-		shortCursor, err := moment.GetCursorByString("short")
+		shortCursor, err := moment.GetCursor("short")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2338,7 +2338,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 		}
 		assertEqual(t, "hi", string(shortValue))
 
-		taggedCursor, err := moment.GetCursorByString("tagged")
+		taggedCursor, err := moment.GetCursor("tagged")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2349,7 +2349,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 		assertEqual(t, "this is a long tagged string!!", string(taggedObj.Value))
 		assertEqual(t, "bi", string(taggedObj.FormatTag))
 
-		fruitsCursor, err := moment.GetCursorByString("fruits")
+		fruitsCursor, err := moment.GetCursor("fruits")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2381,7 +2381,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 		}
 		assertEqual(t, "cherry", string(cherryValue))
 
-		todosCursor, err := moment.GetCursorByString("todos")
+		todosCursor, err := moment.GetCursor("todos")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2413,7 +2413,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 		}
 		assertEqual(t, "task3", string(t3Value))
 
-		countedCursor, err := moment.GetCursorByString("counted")
+		countedCursor, err := moment.GetCursor("counted")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2426,7 +2426,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			t.Fatal(err)
 		}
 		assertEqual(t, int64(2), cCount)
-		aCursor, err := counted.GetCursorByString("a")
+		aCursor, err := counted.GetCursor("a")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2435,7 +2435,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			t.Fatal(err)
 		}
 		assertEqual(t, uint64(1), aValue)
-		bCursor, err := counted.GetCursorByString("b")
+		bCursor, err := counted.GetCursor("b")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2445,7 +2445,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 		}
 		assertEqual(t, uint64(2), bValue)
 
-		setCursor, err := moment.GetCursorByString("myset")
+		setCursor, err := moment.GetCursor("myset")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2453,7 +2453,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 		if err != nil {
 			t.Fatal(err)
 		}
-		xCursor, err := set.GetCursorByString("x")
+		xCursor, err := set.GetCursor("x")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2463,7 +2463,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 		}
 		assertEqual(t, "x", string(xValue))
 
-		csetCursor, err := moment.GetCursorByString("mycset")
+		csetCursor, err := moment.GetCursor("mycset")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2476,7 +2476,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			t.Fatal(err)
 		}
 		assertEqual(t, int64(2), csCount)
-		pCursor, err := cset.GetCursorByString("p")
+		pCursor, err := cset.GetCursor("p")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2502,7 +2502,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			if err != nil {
 				t.Fatal(err)
 			}
-			lastSlot, err := history.GetSlotAt(-1)
+			lastSlot, err := history.GetSlot(-1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2517,7 +2517,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				}
 				for i := 0; i < 20; i++ {
 					key := "shared_key_" + itoa(i)
-					if err := moment.PutString(key, UintData{Value: uint64(i)}); err != nil {
+					if err := moment.Put(key, NewUint(uint64(i))); err != nil {
 						return err
 					}
 				}
@@ -2534,7 +2534,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			if err != nil {
 				t.Fatal(err)
 			}
-			lastSlot, err := history.GetSlotAt(-1)
+			lastSlot, err := history.GetSlot(-1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2548,7 +2548,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				if err != nil {
 					return err
 				}
-				return moment.PutString("changing_key", UintData{Value: uint64(r + 100)})
+				return moment.Put("changing_key", NewUint(uint64(r + 100)))
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -2581,7 +2581,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 
 		for i := 0; i < 20; i++ {
 			key := "shared_key_" + itoa(i)
-			cursor, err := moment.GetCursorByString(key)
+			cursor, err := moment.GetCursor(key)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2592,7 +2592,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			assertEqual(t, uint64(i), v)
 		}
 
-		changingCursor, err := moment.GetCursorByString("changing_key")
+		changingCursor, err := moment.GetCursor("changing_key")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2618,7 +2618,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			if err != nil {
 				t.Fatal(err)
 			}
-			lastSlot, err := history.GetSlotAt(-1)
+			lastSlot, err := history.GetSlot(-1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2631,10 +2631,10 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				if err != nil {
 					return err
 				}
-				if err := moment.PutString("persist", NewBytesDataFromString("persistent_value")); err != nil {
+				if err := moment.Put("persist", NewString("persistent_value")); err != nil {
 					return err
 				}
-				return moment.PutString("number", UintData{Value: 999})
+				return moment.Put("number", NewUint(999))
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -2668,7 +2668,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			if err != nil {
 				t.Fatal(err)
 			}
-			pCursor, err := m.GetCursorByString("persist")
+			pCursor, err := m.GetCursor("persist")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2677,7 +2677,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				t.Fatal(err)
 			}
 			assertEqual(t, "persistent_value", string(pValue))
-			nCursor, err := m.GetCursorByString("number")
+			nCursor, err := m.GetCursor("number")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2701,7 +2701,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			if err != nil {
 				t.Fatal(err)
 			}
-			lastSlot, err := history.GetSlotAt(-1)
+			lastSlot, err := history.GetSlot(-1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2714,7 +2714,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				if err != nil {
 					return err
 				}
-				return moment.PutString("original", NewBytesDataFromString("original_data"))
+				return moment.Put("original", NewString("original_data"))
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -2731,7 +2731,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				if err != nil {
 					t.Fatal(err)
 				}
-				cLastSlot, err := cHistory.GetSlotAt(-1)
+				cLastSlot, err := cHistory.GetSlot(-1)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -2744,7 +2744,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 					if err != nil {
 						return err
 					}
-					return moment.PutString("new_key", NewBytesDataFromString("new_data"))
+					return moment.Put("new_key", NewString("new_data"))
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -2769,7 +2769,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			if err != nil {
 				t.Fatal(err)
 			}
-			origCursor, err := m0.GetCursorByString("original")
+			origCursor, err := m0.GetCursor("original")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2787,7 +2787,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			if err != nil {
 				t.Fatal(err)
 			}
-			newCursor, err := m1.GetCursorByString("new_key")
+			newCursor, err := m1.GetCursor("new_key")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2797,7 +2797,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			}
 			assertEqual(t, "new_data", string(newValue))
 
-			origCursor2, err := m1.GetCursorByString("original")
+			origCursor2, err := m1.GetCursor("original")
 			if err != nil {
 				t.Fatal(err)
 			}

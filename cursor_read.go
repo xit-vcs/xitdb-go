@@ -13,7 +13,7 @@ type ReadCursor struct {
 	DB      *Database
 }
 
-func (c *ReadCursor) GetSlot() Slot {
+func (c *ReadCursor) Slot() Slot {
 	return c.SlotPtr.Slot
 }
 
@@ -77,40 +77,40 @@ func (c *ReadCursor) ReadBytes(maxSize *int64) ([]byte, error) {
 	return obj.Value, nil
 }
 
-func (c *ReadCursor) ReadBytesObject(maxSize *int64) (BytesData, error) {
+func (c *ReadCursor) ReadBytesObject(maxSize *int64) (Bytes, error) {
 	switch c.SlotPtr.Slot.Tag {
 	case TagNone:
-		return BytesData{Value: []byte{}}, nil
+		return Bytes{Value: []byte{}}, nil
 	case TagBytes:
 		if err := c.DB.Core.SeekTo(c.SlotPtr.Slot.Value); err != nil {
-			return BytesData{}, err
+			return Bytes{}, err
 		}
 		valueSize, err := readLong(c.DB.Core)
 		if err != nil {
-			return BytesData{}, err
+			return Bytes{}, err
 		}
 		if maxSize != nil && valueSize > *maxSize {
-			return BytesData{}, ErrStreamTooLong
+			return Bytes{}, ErrStreamTooLong
 		}
 		startPosition, err := c.DB.Core.Position()
 		if err != nil {
-			return BytesData{}, err
+			return Bytes{}, err
 		}
 		value := make([]byte, valueSize)
 		if err := c.DB.Core.Read(value); err != nil {
-			return BytesData{}, err
+			return Bytes{}, err
 		}
 		var formatTag []byte
 		if c.SlotPtr.Slot.Full {
 			if err := c.DB.Core.SeekTo(startPosition + valueSize); err != nil {
-				return BytesData{}, err
+				return Bytes{}, err
 			}
 			formatTag = make([]byte, 2)
 			if err := c.DB.Core.Read(formatTag); err != nil {
-				return BytesData{}, err
+				return Bytes{}, err
 			}
 		}
-		return BytesData{Value: value, FormatTag: formatTag}, nil
+		return Bytes{Value: value, FormatTag: formatTag}, nil
 	case TagShortBytes:
 		var buf [8]byte
 		binary.BigEndian.PutUint64(buf[:], uint64(c.SlotPtr.Slot.Value))
@@ -129,7 +129,7 @@ func (c *ReadCursor) ReadBytesObject(maxSize *int64) (BytesData, error) {
 		}
 
 		if maxSize != nil && int64(valueSize) > *maxSize {
-			return BytesData{}, ErrStreamTooLong
+			return Bytes{}, ErrStreamTooLong
 		}
 
 		var formatTag []byte
@@ -140,9 +140,9 @@ func (c *ReadCursor) ReadBytesObject(maxSize *int64) (BytesData, error) {
 
 		value := make([]byte, valueSize)
 		copy(value, buf[:valueSize])
-		return BytesData{Value: value, FormatTag: formatTag}, nil
+		return Bytes{Value: value, FormatTag: formatTag}, nil
 	default:
-		return BytesData{}, ErrUnexpectedTag
+		return Bytes{}, ErrUnexpectedTag
 	}
 }
 

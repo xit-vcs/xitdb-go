@@ -17,30 +17,30 @@ func NewReadHashSet(cursor *ReadCursor) (*ReadHashSet, error) {
 	}
 }
 
-func (s *ReadHashSet) GetSlot() Slot {
-	return s.Cursor.GetSlot()
+func (s *ReadHashSet) Slot() Slot {
+	return s.Cursor.Slot()
 }
 
 func (s *ReadHashSet) All() iter.Seq2[*ReadCursor, error] {
 	return s.Cursor.All()
 }
 
-func (s *ReadHashSet) GetCursorByString(key string) (*ReadCursor, error) {
+func (s *ReadHashSet) GetCursor(key string) (*ReadCursor, error) {
 	hash := s.Cursor.DB.digest([]byte(key))
 	return s.GetCursorByHash(hash)
 }
 
-func (s *ReadHashSet) GetSlotByString(key string) (*Slot, error) {
+func (s *ReadHashSet) GetSlot(key string) (*Slot, error) {
 	hash := s.Cursor.DB.digest([]byte(key))
 	return s.GetSlotByHash(hash)
 }
 
-func (s *ReadHashSet) GetCursorByBytes(key BytesData) (*ReadCursor, error) {
+func (s *ReadHashSet) GetCursorByBytes(key Bytes) (*ReadCursor, error) {
 	hash := s.Cursor.DB.digest(key.Value)
 	return s.GetCursorByHash(hash)
 }
 
-func (s *ReadHashSet) GetSlotByBytes(key BytesData) (*Slot, error) {
+func (s *ReadHashSet) GetSlotByBytes(key Bytes) (*Slot, error) {
 	hash := s.Cursor.DB.digest(key.Value)
 	return s.GetSlotByHash(hash)
 }
@@ -72,33 +72,33 @@ func NewWriteHashSet(cursor *WriteCursor) (*WriteHashSet, error) {
 	return &WriteHashSet{ReadHashSet: rs, writeCursor: wc}, nil
 }
 
-func (s *WriteHashSet) PutString(key string) error {
+func (s *WriteHashSet) Put(key string) error {
 	b := []byte(key)
 	hash := s.Cursor.DB.digest(b)
-	return s.PutByHash(hash, NewBytesData(b))
+	return s.PutByHash(hash, NewBytes(b))
 }
 
-func (s *WriteHashSet) PutCursorByString(key string) (*WriteCursor, error) {
+func (s *WriteHashSet) PutCursor(key string) (*WriteCursor, error) {
 	hash := s.Cursor.DB.digest([]byte(key))
 	return s.PutCursorByHash(hash)
 }
 
-func (s *WriteHashSet) RemoveByString(key string) (bool, error) {
+func (s *WriteHashSet) Remove(key string) (bool, error) {
 	hash := s.Cursor.DB.digest([]byte(key))
 	return s.RemoveByHash(hash)
 }
 
-func (s *WriteHashSet) PutBytes(key BytesData) error {
+func (s *WriteHashSet) PutBytes(key Bytes) error {
 	hash := s.Cursor.DB.digest(key.Value)
 	return s.PutByHash(hash, key)
 }
 
-func (s *WriteHashSet) PutCursorByBytes(key BytesData) (*WriteCursor, error) {
+func (s *WriteHashSet) PutCursorByBytes(key Bytes) (*WriteCursor, error) {
 	hash := s.Cursor.DB.digest(key.Value)
 	return s.PutCursorByHash(hash)
 }
 
-func (s *WriteHashSet) RemoveByBytes(key BytesData) (bool, error) {
+func (s *WriteHashSet) RemoveByBytes(key Bytes) (bool, error) {
 	hash := s.Cursor.DB.digest(key.Value)
 	return s.RemoveByHash(hash)
 }

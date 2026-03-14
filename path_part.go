@@ -1062,15 +1062,15 @@ func (p WriteDataPart) readSlotPointer(db *Database, isTopLevel bool, writeMode 
 		slot = Slot{}
 	case Slot:
 		slot = data
-	case UintData:
+	case Uint:
 		slot = Slot{Value: int64(data.Value), Tag: TagUint}
-	case IntData:
+	case Int:
 		slot = Slot{Value: data.Value, Tag: TagInt}
-	case FloatData:
+	case Float:
 		var buf [8]byte
 		binary.BigEndian.PutUint64(buf[:], math.Float64bits(data.Value))
 		slot = Slot{Value: int64(binary.BigEndian.Uint64(buf[:])), Tag: TagFloat}
-	case BytesData:
+	case Bytes:
 		if data.FormatTag != nil && len(data.FormatTag) != 2 {
 			return SlotPointer{}, ErrInvalidFormatTagSize
 		}

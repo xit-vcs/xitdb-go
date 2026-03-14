@@ -17,8 +17,8 @@ func NewReadArrayList(cursor *ReadCursor) (*ReadArrayList, error) {
 	}
 }
 
-func (a *ReadArrayList) GetSlot() Slot {
-	return a.cursor.GetSlot()
+func (a *ReadArrayList) Slot() Slot {
+	return a.cursor.Slot()
 }
 
 func (a *ReadArrayList) Count() (int64, error) {
@@ -29,7 +29,7 @@ func (a *ReadArrayList) GetCursor(index int64) (*ReadCursor, error) {
 	return a.cursor.ReadPath([]PathPart{ArrayListGet{Index: index}})
 }
 
-func (a *ReadArrayList) GetSlotAt(index int64) (*Slot, error) {
+func (a *ReadArrayList) GetSlot(index int64) (*Slot, error) {
 	return a.cursor.ReadPathSlot([]PathPart{ArrayListGet{Index: index}})
 }
 

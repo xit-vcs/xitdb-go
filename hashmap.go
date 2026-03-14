@@ -17,8 +17,8 @@ func NewReadHashMap(cursor *ReadCursor) (*ReadHashMap, error) {
 	}
 }
 
-func (m *ReadHashMap) GetSlot() Slot {
-	return m.Cursor.GetSlot()
+func (m *ReadHashMap) Slot() Slot {
+	return m.Cursor.Slot()
 }
 
 func (m *ReadHashMap) All() iter.Seq2[*ReadCursor, error] {
@@ -27,54 +27,54 @@ func (m *ReadHashMap) All() iter.Seq2[*ReadCursor, error] {
 
 // String key methods
 
-func (m *ReadHashMap) GetCursorByString(key string) (*ReadCursor, error) {
+func (m *ReadHashMap) GetCursor(key string) (*ReadCursor, error) {
 	hash := m.Cursor.DB.digest([]byte(key))
 	return m.GetCursorByHash(hash)
 }
 
-func (m *ReadHashMap) GetSlotByString(key string) (*Slot, error) {
+func (m *ReadHashMap) GetSlot(key string) (*Slot, error) {
 	hash := m.Cursor.DB.digest([]byte(key))
 	return m.GetSlotByHash(hash)
 }
 
-func (m *ReadHashMap) GetKeyCursorByString(key string) (*ReadCursor, error) {
+func (m *ReadHashMap) GetKeyCursor(key string) (*ReadCursor, error) {
 	hash := m.Cursor.DB.digest([]byte(key))
 	return m.GetKeyCursorByHash(hash)
 }
 
-func (m *ReadHashMap) GetKeySlotByString(key string) (*Slot, error) {
+func (m *ReadHashMap) GetKeySlot(key string) (*Slot, error) {
 	hash := m.Cursor.DB.digest([]byte(key))
 	return m.GetKeySlotByHash(hash)
 }
 
-func (m *ReadHashMap) GetKeyValuePairByString(key string) (*ReadKVPairCursor, error) {
+func (m *ReadHashMap) GetKeyValuePair(key string) (*ReadKVPairCursor, error) {
 	hash := m.Cursor.DB.digest([]byte(key))
 	return m.GetKeyValuePairByHash(hash)
 }
 
-// BytesData key methods
+// Bytes key methods
 
-func (m *ReadHashMap) GetCursorByBytes(key BytesData) (*ReadCursor, error) {
+func (m *ReadHashMap) GetCursorByBytes(key Bytes) (*ReadCursor, error) {
 	hash := m.Cursor.DB.digest(key.Value)
 	return m.GetCursorByHash(hash)
 }
 
-func (m *ReadHashMap) GetSlotByBytes(key BytesData) (*Slot, error) {
+func (m *ReadHashMap) GetSlotByBytes(key Bytes) (*Slot, error) {
 	hash := m.Cursor.DB.digest(key.Value)
 	return m.GetSlotByHash(hash)
 }
 
-func (m *ReadHashMap) GetKeyCursorByBytes(key BytesData) (*ReadCursor, error) {
+func (m *ReadHashMap) GetKeyCursorByBytes(key Bytes) (*ReadCursor, error) {
 	hash := m.Cursor.DB.digest(key.Value)
 	return m.GetKeyCursorByHash(hash)
 }
 
-func (m *ReadHashMap) GetKeySlotByBytes(key BytesData) (*Slot, error) {
+func (m *ReadHashMap) GetKeySlotByBytes(key Bytes) (*Slot, error) {
 	hash := m.Cursor.DB.digest(key.Value)
 	return m.GetKeySlotByHash(hash)
 }
 
-func (m *ReadHashMap) GetKeyValuePairByBytes(key BytesData) (*ReadKVPairCursor, error) {
+func (m *ReadHashMap) GetKeyValuePairByBytes(key Bytes) (*ReadKVPairCursor, error) {
 	hash := m.Cursor.DB.digest(key.Value)
 	return m.GetKeyValuePairByHash(hash)
 }
@@ -129,40 +129,40 @@ func NewWriteHashMap(cursor *WriteCursor) (*WriteHashMap, error) {
 
 // String key methods
 
-func (m *WriteHashMap) PutString(key string, data WriteableData) error {
+func (m *WriteHashMap) Put(key string, data WriteableData) error {
 	hash := m.Cursor.DB.digest([]byte(key))
-	if err := m.PutKeyByHash(hash, NewBytesDataFromString(key)); err != nil {
+	if err := m.PutKeyByHash(hash, NewString(key)); err != nil {
 		return err
 	}
 	return m.PutByHash(hash, data)
 }
 
-func (m *WriteHashMap) PutCursorByString(key string) (*WriteCursor, error) {
+func (m *WriteHashMap) PutCursor(key string) (*WriteCursor, error) {
 	hash := m.Cursor.DB.digest([]byte(key))
-	if err := m.PutKeyByHash(hash, NewBytesDataFromString(key)); err != nil {
+	if err := m.PutKeyByHash(hash, NewString(key)); err != nil {
 		return nil, err
 	}
 	return m.PutCursorByHash(hash)
 }
 
-func (m *WriteHashMap) PutKeyByString(key string, data WriteableData) error {
+func (m *WriteHashMap) PutKey(key string, data WriteableData) error {
 	hash := m.Cursor.DB.digest([]byte(key))
 	return m.PutKeyByHash(hash, data)
 }
 
-func (m *WriteHashMap) PutKeyCursorByString(key string) (*WriteCursor, error) {
+func (m *WriteHashMap) PutKeyCursor(key string) (*WriteCursor, error) {
 	hash := m.Cursor.DB.digest([]byte(key))
 	return m.PutKeyCursorByHash(hash)
 }
 
-func (m *WriteHashMap) RemoveByString(key string) (bool, error) {
+func (m *WriteHashMap) Remove(key string) (bool, error) {
 	hash := m.Cursor.DB.digest([]byte(key))
 	return m.RemoveByHash(hash)
 }
 
-// BytesData key methods
+// Bytes key methods
 
-func (m *WriteHashMap) PutBytes(key BytesData, data WriteableData) error {
+func (m *WriteHashMap) PutBytes(key Bytes, data WriteableData) error {
 	hash := m.Cursor.DB.digest(key.Value)
 	if err := m.PutKeyByHash(hash, key); err != nil {
 		return err
@@ -170,7 +170,7 @@ func (m *WriteHashMap) PutBytes(key BytesData, data WriteableData) error {
 	return m.PutByHash(hash, data)
 }
 
-func (m *WriteHashMap) PutCursorByBytes(key BytesData) (*WriteCursor, error) {
+func (m *WriteHashMap) PutCursorByBytes(key Bytes) (*WriteCursor, error) {
 	hash := m.Cursor.DB.digest(key.Value)
 	if err := m.PutKeyByHash(hash, key); err != nil {
 		return nil, err
@@ -178,17 +178,17 @@ func (m *WriteHashMap) PutCursorByBytes(key BytesData) (*WriteCursor, error) {
 	return m.PutCursorByHash(hash)
 }
 
-func (m *WriteHashMap) PutKeyByBytes(key BytesData, data WriteableData) error {
+func (m *WriteHashMap) PutKeyByBytes(key Bytes, data WriteableData) error {
 	hash := m.Cursor.DB.digest(key.Value)
 	return m.PutKeyByHash(hash, data)
 }
 
-func (m *WriteHashMap) PutKeyCursorByBytes(key BytesData) (*WriteCursor, error) {
+func (m *WriteHashMap) PutKeyCursorByBytes(key Bytes) (*WriteCursor, error) {
 	hash := m.Cursor.DB.digest(key.Value)
 	return m.PutKeyCursorByHash(hash)
 }
 
-func (m *WriteHashMap) RemoveByBytes(key BytesData) (bool, error) {
+func (m *WriteHashMap) RemoveByBytes(key Bytes) (bool, error) {
 	hash := m.Cursor.DB.digest(key.Value)
 	return m.RemoveByHash(hash)
 }

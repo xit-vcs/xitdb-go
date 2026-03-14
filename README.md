@@ -72,7 +72,7 @@ if err != nil {
 //    {"name": "Alice", "age": 25},
 //    {"name": "Bob", "age": 42}
 //  ]}
-lastSlot, err := history.GetSlotAt(-1)
+lastSlot, err := history.GetSlot(-1)
 if err != nil {
     log.Fatal(err)
 }
@@ -87,14 +87,14 @@ err = history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
         return err
     }
 
-    if err := moment.PutString("foo", xitdb.NewBytesDataFromString("foo")); err != nil {
+    if err := moment.Put("foo", xitdb.NewString("foo")); err != nil {
         return err
     }
-    if err := moment.PutString("bar", xitdb.NewBytesDataFromString("bar")); err != nil {
+    if err := moment.Put("bar", xitdb.NewString("bar")); err != nil {
         return err
     }
 
-    fruitsCursor, err := moment.PutCursorByString("fruits")
+    fruitsCursor, err := moment.PutCursor("fruits")
     if err != nil {
         return err
     }
@@ -102,17 +102,17 @@ err = history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
     if err != nil {
         return err
     }
-    if err := fruits.Append(xitdb.NewBytesDataFromString("apple")); err != nil {
+    if err := fruits.Append(xitdb.NewString("apple")); err != nil {
         return err
     }
-    if err := fruits.Append(xitdb.NewBytesDataFromString("pear")); err != nil {
+    if err := fruits.Append(xitdb.NewString("pear")); err != nil {
         return err
     }
-    if err := fruits.Append(xitdb.NewBytesDataFromString("grape")); err != nil {
+    if err := fruits.Append(xitdb.NewString("grape")); err != nil {
         return err
     }
 
-    peopleCursor, err := moment.PutCursorByString("people")
+    peopleCursor, err := moment.PutCursor("people")
     if err != nil {
         return err
     }
@@ -129,10 +129,10 @@ err = history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
     if err != nil {
         return err
     }
-    if err := alice.PutString("name", xitdb.NewBytesDataFromString("Alice")); err != nil {
+    if err := alice.Put("name", xitdb.NewString("Alice")); err != nil {
         return err
     }
-    if err := alice.PutString("age", xitdb.UintData{Value: 25}); err != nil {
+    if err := alice.Put("age", xitdb.NewUint(25)); err != nil {
         return err
     }
 
@@ -144,10 +144,10 @@ err = history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
     if err != nil {
         return err
     }
-    if err := bob.PutString("name", xitdb.NewBytesDataFromString("Bob")); err != nil {
+    if err := bob.Put("name", xitdb.NewString("Bob")); err != nil {
         return err
     }
-    if err := bob.PutString("age", xitdb.UintData{Value: 42}); err != nil {
+    if err := bob.Put("age", xitdb.NewUint(42)); err != nil {
         return err
     }
 
@@ -170,7 +170,7 @@ if err != nil {
 
 // we can read the value of "foo" from the map by getting
 // the cursor to "foo" and then calling ReadBytes on it
-fooCursor, err := moment.GetCursorByString("foo")
+fooCursor, err := moment.GetCursor("foo")
 if err != nil {
     log.Fatal(err)
 }
@@ -183,7 +183,7 @@ fmt.Println(string(fooValue)) // "foo"
 
 // to get the "fruits" list, we get the cursor to it and
 // then pass it to the ArrayList constructor
-fruitsCursor, err := moment.GetCursorByString("fruits")
+fruitsCursor, err := moment.GetCursor("fruits")
 if err != nil {
     log.Fatal(err)
 }
@@ -235,19 +235,19 @@ All data structures use the hash array mapped trie, invented by Phil Bagwell. Th
 
 There are also scalar types you can store in the above-mentioned data structures:
 
-* `BytesData` is a byte array
-* `UintData` is an unsigned 64-bit int
-* `IntData` is a signed 64-bit int
-* `FloatData` is a 64-bit float
+* `Bytes` is a byte array
+* `Uint` is an unsigned 64-bit int
+* `Int` is a signed 64-bit int
+* `Float` is a 64-bit float
 
-You may also want to define custom types. For example, you may want to store a big integer that can't fit in 64 bits. You could just store this with `BytesData`, but when reading the byte array there wouldn't be any indication that it should be interpreted as a big integer.
+You may also want to define custom types. For example, you may want to store a big integer that can't fit in 64 bits. You could just store this with `Bytes`, but when reading the byte array there wouldn't be any indication that it should be interpreted as a big integer.
 
 In xitdb, you can optionally store a format tag with a byte array. A format tag is a 2 byte tag that is stored alongside the byte array. Readers can use it to decide how to interpret the byte array. Here's an example of storing a random 256-bit number with `bi` as the format tag:
 
 ```go
 randomBigInt := make([]byte, 32)
 rand.Read(randomBigInt)
-if err := moment.PutString("random-number", xitdb.NewBytesDataWithFormat(randomBigInt, []byte("bi"))); err != nil {
+if err := moment.Put("random-number", xitdb.NewTaggedBytes(randomBigInt, []byte("bi"))); err != nil {
     return err
 }
 ```
@@ -255,7 +255,7 @@ if err := moment.PutString("random-number", xitdb.NewBytesDataWithFormat(randomB
 Then, you can read it like this:
 
 ```go
-randomNumberCursor, err := moment.GetCursorByString("random-number")
+randomNumberCursor, err := moment.GetCursor("random-number")
 if err != nil {
     log.Fatal(err)
 }
@@ -275,7 +275,7 @@ There are many types you may want to store this way. Maybe an ISO-8601 date like
 A powerful feature of immutable data is fast cloning. Any data structure can be instantly cloned and changed without affecting the original. Starting with the example code above, we can make a new transaction that creates a "food" list based on the existing "fruits" list:
 
 ```go
-lastSlot, err := history.GetSlotAt(-1)
+lastSlot, err := history.GetSlot(-1)
 if err != nil {
     log.Fatal(err)
 }
@@ -290,7 +290,7 @@ err = history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
         return err
     }
 
-    fruitsCursor, err := moment.GetCursorByString("fruits")
+    fruitsCursor, err := moment.GetCursor("fruits")
     if err != nil {
         return err
     }
@@ -301,23 +301,23 @@ err = history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
 
     // create a new key called "food" whose initial value is
     // based on the "fruits" list
-    foodCursor, err := moment.PutCursorByString("food")
+    foodCursor, err := moment.PutCursor("food")
     if err != nil {
         return err
     }
-    foodCursor.WriteValue(fruits.GetSlot())
+    foodCursor.WriteValue(fruits.Slot())
 
     food, err := xitdb.NewWriteArrayList(foodCursor)
     if err != nil {
         return err
     }
-    if err := food.Append(xitdb.NewBytesDataFromString("eggs")); err != nil {
+    if err := food.Append(xitdb.NewString("eggs")); err != nil {
         return err
     }
-    if err := food.Append(xitdb.NewBytesDataFromString("rice")); err != nil {
+    if err := food.Append(xitdb.NewString("rice")); err != nil {
         return err
     }
-    if err := food.Append(xitdb.NewBytesDataFromString("fish")); err != nil {
+    if err := food.Append(xitdb.NewString("fish")); err != nil {
         return err
     }
 
@@ -337,7 +337,7 @@ if err != nil {
 }
 
 // the food list includes the fruits
-foodCursor, err := moment.GetCursorByString("food")
+foodCursor, err := moment.GetCursor("food")
 if err != nil {
     log.Fatal(err)
 }
@@ -352,7 +352,7 @@ if err != nil {
 fmt.Println(foodCount) // 6
 
 // ...but the fruits list hasn't been changed
-fruitsCursor, err := moment.GetCursorByString("fruits")
+fruitsCursor, err := moment.GetCursor("fruits")
 if err != nil {
     log.Fatal(err)
 }
@@ -380,7 +380,7 @@ historyIndex := historyCount - 1
 There's one catch you'll run into when cloning. If we try cloning a data structure that was created in the same transaction, it doesn't seem to work:
 
 ```go
-lastSlot, err := history.GetSlotAt(-1)
+lastSlot, err := history.GetSlot(-1)
 if err != nil {
     log.Fatal(err)
 }
@@ -395,7 +395,7 @@ err = history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
         return err
     }
 
-    bigCitiesCursor, err := moment.PutCursorByString("big-cities")
+    bigCitiesCursor, err := moment.PutCursor("big-cities")
     if err != nil {
         return err
     }
@@ -403,29 +403,29 @@ err = history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
     if err != nil {
         return err
     }
-    if err := bigCities.Append(xitdb.NewBytesDataFromString("New York, NY")); err != nil {
+    if err := bigCities.Append(xitdb.NewString("New York, NY")); err != nil {
         return err
     }
-    if err := bigCities.Append(xitdb.NewBytesDataFromString("Los Angeles, CA")); err != nil {
+    if err := bigCities.Append(xitdb.NewString("Los Angeles, CA")); err != nil {
         return err
     }
 
     // create a new key called "cities" whose initial value is
     // based on the "big-cities" list
-    citiesCursor, err := moment.PutCursorByString("cities")
+    citiesCursor, err := moment.PutCursor("cities")
     if err != nil {
         return err
     }
-    citiesCursor.WriteValue(bigCities.GetSlot())
+    citiesCursor.WriteValue(bigCities.Slot())
 
     cities, err := xitdb.NewWriteArrayList(citiesCursor)
     if err != nil {
         return err
     }
-    if err := cities.Append(xitdb.NewBytesDataFromString("Charleston, SC")); err != nil {
+    if err := cities.Append(xitdb.NewString("Charleston, SC")); err != nil {
         return err
     }
-    if err := cities.Append(xitdb.NewBytesDataFromString("Louisville, KY")); err != nil {
+    if err := cities.Append(xitdb.NewString("Louisville, KY")); err != nil {
         return err
     }
 
@@ -445,7 +445,7 @@ if err != nil {
 }
 
 // the cities list contains all four
-citiesCursor, err := moment.GetCursorByString("cities")
+citiesCursor, err := moment.GetCursor("cities")
 if err != nil {
     log.Fatal(err)
 }
@@ -460,7 +460,7 @@ if err != nil {
 fmt.Println(citiesCount) // 4
 
 // ..but so does big-cities! we did not intend to mutate this
-bigCitiesCursor, err := moment.GetCursorByString("big-cities")
+bigCitiesCursor, err := moment.GetCursor("big-cities")
 if err != nil {
     log.Fatal(err)
 }
@@ -480,7 +480,7 @@ The reason that `big-cities` was mutated is because all data in a given transact
 To show how to fix this, let's first undo the transaction we just made. Here we use the `historyIndex` we saved before to revert back to the older database moment:
 
 ```go
-historySlot, err := history.GetSlotAt(historyIndex)
+historySlot, err := history.GetSlot(historyIndex)
 if err != nil {
     log.Fatal(err)
 }
@@ -492,7 +492,7 @@ if err := history.Append(*historySlot); err != nil {
 This time, after making the "big cities" list, we call `Freeze`, which tells xitdb to consider all data made so far in the transaction to be immutable. After that, we can clone it into the "cities" list and it will work the way we wanted:
 
 ```go
-lastSlot, err := history.GetSlotAt(-1)
+lastSlot, err := history.GetSlot(-1)
 if err != nil {
     log.Fatal(err)
 }
@@ -507,7 +507,7 @@ err = history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
         return err
     }
 
-    bigCitiesCursor, err := moment.PutCursorByString("big-cities")
+    bigCitiesCursor, err := moment.PutCursor("big-cities")
     if err != nil {
         return err
     }
@@ -515,10 +515,10 @@ err = history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
     if err != nil {
         return err
     }
-    if err := bigCities.Append(xitdb.NewBytesDataFromString("New York, NY")); err != nil {
+    if err := bigCities.Append(xitdb.NewString("New York, NY")); err != nil {
         return err
     }
-    if err := bigCities.Append(xitdb.NewBytesDataFromString("Los Angeles, CA")); err != nil {
+    if err := bigCities.Append(xitdb.NewString("Los Angeles, CA")); err != nil {
         return err
     }
 
@@ -529,20 +529,20 @@ err = history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
 
     // create a new key called "cities" whose initial value is
     // based on the "big-cities" list
-    citiesCursor, err := moment.PutCursorByString("cities")
+    citiesCursor, err := moment.PutCursor("cities")
     if err != nil {
         return err
     }
-    citiesCursor.WriteValue(bigCities.GetSlot())
+    citiesCursor.WriteValue(bigCities.Slot())
 
     cities, err := xitdb.NewWriteArrayList(citiesCursor)
     if err != nil {
         return err
     }
-    if err := cities.Append(xitdb.NewBytesDataFromString("Charleston, SC")); err != nil {
+    if err := cities.Append(xitdb.NewString("Charleston, SC")); err != nil {
         return err
     }
-    if err := cities.Append(xitdb.NewBytesDataFromString("Louisville, KY")); err != nil {
+    if err := cities.Append(xitdb.NewString("Louisville, KY")); err != nil {
         return err
     }
 
@@ -562,7 +562,7 @@ if err != nil {
 }
 
 // the cities list contains all four
-citiesCursor, err := moment.GetCursorByString("cities")
+citiesCursor, err := moment.GetCursor("cities")
 if err != nil {
     log.Fatal(err)
 }
@@ -577,7 +577,7 @@ if err != nil {
 fmt.Println(citiesCount) // 4
 
 // and big-cities only contains the original two
-bigCitiesCursor, err := moment.GetCursorByString("big-cities")
+bigCitiesCursor, err := moment.GetCursor("big-cities")
 if err != nil {
     log.Fatal(err)
 }
@@ -597,7 +597,7 @@ fmt.Println(bigCitiesCount) // 2
 When reading and writing large byte arrays, you probably don't want to have all of their contents in memory at once. To incrementally write to a byte array, just get a writer from a cursor:
 
 ```go
-longTextCursor, err := moment.PutCursorByString("long-text")
+longTextCursor, err := moment.PutCursor("long-text")
 if err != nil {
     return err
 }
@@ -620,7 +620,7 @@ If you need to set a format tag for the byte array, set the `formatTag` field on
 To read a byte array incrementally, get a reader from a cursor:
 
 ```go
-longTextCursor, err := moment.GetCursorByString("long-text")
+longTextCursor, err := moment.GetCursor("long-text")
 if err != nil {
     log.Fatal(err)
 }
@@ -641,7 +641,7 @@ fmt.Println(count) // 50
 All data structures support iteration using Go 1.23's range-over-func iterators. Here's an example of iterating over an `ArrayList` and printing all of the keys and values of each `HashMap` contained in it:
 
 ```go
-peopleCursor, err := moment.GetCursorByString("people")
+peopleCursor, err := moment.GetCursor("people")
 if err != nil {
     log.Fatal(err)
 }
@@ -706,11 +706,11 @@ for personCursor, err := range people.All() {
 
 The above code iterates over `people`, which is an `ArrayList`, and for each person (which is a `HashMap`), it iterates over each of its key-value pairs.
 
-The iteration of the `HashMap` looks the same with `HashSet`, `CountedHashMap`, and `CountedHashSet`. When iterating, you call `ReadKeyValuePair` on the cursor and can read the `KeyCursor` and `ValueCursor` from it. In maps, `PutString` sets the key and value. In sets, `PutString` only sets the key; the value will always have a tag type of `TagNone`.
+The iteration of the `HashMap` looks the same with `HashSet`, `CountedHashMap`, and `CountedHashSet`. When iterating, you call `ReadKeyValuePair` on the cursor and can read the `KeyCursor` and `ValueCursor` from it. In maps, `Put` sets the key and value. In sets, `Put` only sets the key; the value will always have a tag type of `TagNone`.
 
 ## Hashing
 
-The hashing data structures will create the hash for you when you call methods like `PutString` or `GetCursorByString` and provide the key as a `string`. If you want to do the hashing yourself, there are methods like `PutByHash` and `GetCursorByHash` that take a `[]byte` as the hash.
+The hashing data structures will create the hash for you when you call methods like `Put` or `GetCursor`. If you want to do the hashing yourself, there are methods like `PutByHash` and `GetCursorByHash` that take a `[]byte` as the hash.
 
 When initializing a database, you tell xitdb how to hash with the `Hasher`. If you're using SHA-1, it will look like this:
 
