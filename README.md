@@ -43,7 +43,7 @@ defer f.Close()
 
 // init the db
 core := xitdb.NewCoreBufferedFile(f)
-hasher := xitdb.Hasher{NewHash: func() hash.Hash { return sha1.New() }}
+hasher := xitdb.Hasher{Hash: sha1.New()}
 db, err := xitdb.NewDatabase(core, hasher)
 if err != nil {
     log.Fatal(err)
@@ -722,7 +722,7 @@ if err != nil {
 defer f.Close()
 
 core := xitdb.NewCoreFile(f)
-hasher := xitdb.Hasher{NewHash: func() hash.Hash { return sha1.New() }}
+hasher := xitdb.Hasher{Hash: sha1.New()}
 db, err := xitdb.NewDatabase(core, hasher)
 if err != nil {
     log.Fatal(err)
@@ -750,8 +750,8 @@ if err != nil {
     log.Fatal(err)
 }
 hasher := xitdb.Hasher{
-    NewHash: func() hash.Hash { return sha1.New() },
-    ID:      id,
+    Hash: sha1.New(),
+    ID:   id,
 }
 ```
 
@@ -783,20 +783,20 @@ var hasher xitdb.Hasher
 switch xitdb.IDToString(header.HashID) {
 case "sha1":
     hasher = xitdb.Hasher{
-        NewHash: func() hash.Hash { return sha1.New() },
-        ID:      header.HashID,
+        Hash: sha1.New(),
+        ID:   header.HashID,
     }
 case "sha2":
     switch header.HashSize {
     case 32:
         hasher = xitdb.Hasher{
-            NewHash: func() hash.Hash { return sha256.New() },
-            ID:      header.HashID,
+            Hash: sha256.New(),
+            ID:   header.HashID,
         }
     case 64:
         hasher = xitdb.Hasher{
-            NewHash: func() hash.Hash { return sha512.New() },
-            ID:      header.HashID,
+            Hash: sha512.New(),
+            ID:   header.HashID,
         }
     default:
         log.Fatal("Invalid hash size")

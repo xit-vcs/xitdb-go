@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"hash"
 	"os"
 	"strings"
 	"unicode"
@@ -381,20 +380,20 @@ func hasherFromHeader(header xitdb.Header) (xitdb.Hasher, error) {
 	switch id {
 	case "sha1":
 		return xitdb.Hasher{
-			NewHash: func() hash.Hash { return sha1.New() },
-			ID:      header.HashID,
+			Hash: sha1.New(),
+			ID:   header.HashID,
 		}, nil
 	case "sha2":
 		switch header.HashSize {
 		case 32:
 			return xitdb.Hasher{
-				NewHash: func() hash.Hash { return sha256.New() },
-				ID:      header.HashID,
+				Hash: sha256.New(),
+				ID:   header.HashID,
 			}, nil
 		case 64:
 			return xitdb.Hasher{
-				NewHash: func() hash.Hash { return sha512.New() },
-				ID:      header.HashID,
+				Hash: sha512.New(),
+				ID:   header.HashID,
 			}, nil
 		default:
 			return xitdb.Hasher{}, fmt.Errorf("unsupported sha2 hash size: %d", header.HashSize)
@@ -402,8 +401,8 @@ func hasherFromHeader(header xitdb.Header) (xitdb.Hasher, error) {
 	default:
 		// Fall back to SHA-1 for unknown/zero hash IDs
 		return xitdb.Hasher{
-			NewHash: func() hash.Hash { return sha1.New() },
-			ID:      header.HashID,
+			Hash: sha1.New(),
+			ID:   header.HashID,
 		}, nil
 	}
 }

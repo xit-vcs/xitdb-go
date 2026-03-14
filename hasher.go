@@ -7,8 +7,8 @@ import (
 )
 
 type Hasher struct {
-	NewHash func() hash.Hash
-	ID      uint32
+	Hash hash.Hash
+	ID   uint32
 }
 
 func StringToID(name string) (uint32, error) {

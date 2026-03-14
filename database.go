@@ -324,7 +324,6 @@ type ContextFunction func(cursor *WriteCursor) error
 
 type Database struct {
 	Core    Core
-	md      func() []byte // hash function: takes data, returns digest
 	hashFn  func(data []byte) []byte
 	Header  Header
 	TxStart *int64
@@ -335,11 +334,10 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 		Core: core,
 	}
 
-	h := hasher.NewHash()
 	db.hashFn = func(data []byte) []byte {
-		h.Reset()
-		h.Write(data)
-		return h.Sum(nil)
+		hasher.Hash.Reset()
+		hasher.Hash.Write(data)
+		return hasher.Hash.Sum(nil)
 	}
 
 	if err := core.SeekTo(0); err != nil {
@@ -351,7 +349,7 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 	}
 
 	if length == 0 {
-		digestLen := uint16(h.Size())
+		digestLen := uint16(hasher.Hash.Size())
 		db.Header = Header{
 			HashID:      hasher.ID,
 			HashSize:    digestLen,
@@ -373,7 +371,7 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 		if err := header.Validate(); err != nil {
 			return nil, err
 		}
-		digestLen := uint16(h.Size())
+		digestLen := uint16(hasher.Hash.Size())
 		if header.HashSize != digestLen {
 			return nil, ErrInvalidHashSize
 		}

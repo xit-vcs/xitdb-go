@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha1"
-	"hash"
 	"io"
 	"os"
 	"strconv"
@@ -13,15 +12,15 @@ import (
 
 func sha1Hasher() Hasher {
 	return Hasher{
-		NewHash: func() hash.Hash { return sha1.New() },
+		Hash: sha1.New(),
 	}
 }
 
 func sha1HasherWithID() Hasher {
 	id, _ := StringToID("sha1")
 	return Hasher{
-		NewHash: func() hash.Hash { return sha1.New() },
-		ID:      id,
+		Hash: sha1.New(),
+		ID:   id,
 	}
 }
 

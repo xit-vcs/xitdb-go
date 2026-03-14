@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"errors"
-	"hash"
 	"math/big"
 	"os"
 	"strconv"
@@ -724,8 +723,8 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			t.Fatal(err)
 		}
 		hasherWithHashID := Hasher{
-			NewHash: func() hash.Hash { return sha1.New() },
-			ID:      hashID,
+			Hash: sha1.New(),
+			ID:   hashID,
 		}
 
 		// make empty database
@@ -753,14 +752,13 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		switch IDToString(header.HashID) {
 		case "sha1":
 			determinedHasher = Hasher{
-				NewHash: func() hash.Hash { return sha1.New() },
-				ID:      header.HashID,
+				Hash: sha1.New(),
+				ID:   header.HashID,
 			}
 		default:
 			t.Fatal("Invalid hash algorithm")
 		}
-		h := determinedHasher.NewHash()
-		assertEqual(t, 20, h.Size())
+		assertEqual(t, 20, determinedHasher.Hash.Size())
 	}
 
 	// array_list of hash_maps
