@@ -706,7 +706,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err := core.SeekTo(4); err != nil {
 			t.Fatal(err)
 		}
-		if err := writeShort(core, Version+1); err != nil {
+		if err := writeUint16(core, Version+1); err != nil {
 			t.Fatal(err)
 		}
 
@@ -745,7 +745,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		assertEqual(t, int16(20), header.HashSize)
+		assertEqual(t, uint16(20), header.HashSize)
 		assertEqual(t, "sha1", IDToString(header.HashID))
 
 		// determine the hashing algorithm

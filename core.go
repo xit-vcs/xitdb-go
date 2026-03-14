@@ -27,17 +27,17 @@ func writeLong(c Core, v int64) error {
 	return c.Write(buf[:])
 }
 
-func readShort(c Core) (int16, error) {
+func readUint16(c Core) (uint16, error) {
 	var buf [2]byte
 	if err := c.Read(buf[:]); err != nil {
 		return 0, err
 	}
-	return int16(binary.BigEndian.Uint16(buf[:])), nil
+	return binary.BigEndian.Uint16(buf[:]), nil
 }
 
-func writeShort(c Core, v int16) error {
+func writeUint16(c Core, v uint16) error {
 	var buf [2]byte
-	binary.BigEndian.PutUint16(buf[:], uint16(v))
+	binary.BigEndian.PutUint16(buf[:], v)
 	return c.Write(buf[:])
 }
 

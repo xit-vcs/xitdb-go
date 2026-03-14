@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	Version                        int16 = 0
+	Version                        uint16 = 0
 	DatabaseStart                        = HeaderLength
 	BitCount                             = 4
 	SlotCount                            = 1 << BitCount
@@ -36,8 +36,8 @@ const HeaderLength = 12
 
 type Header struct {
 	HashID      uint32
-	HashSize    int16
-	Version     int16
+	HashSize    uint16
+	Version     uint16
 	Tag         Tag
 	MagicNumber [3]byte
 }
@@ -46,8 +46,8 @@ func (h Header) ToBytes() [HeaderLength]byte {
 	var buf [HeaderLength]byte
 	copy(buf[0:3], h.MagicNumber[:])
 	buf[3] = byte(h.Tag)
-	binary.BigEndian.PutUint16(buf[4:6], uint16(h.Version))
-	binary.BigEndian.PutUint16(buf[6:8], uint16(h.HashSize))
+	binary.BigEndian.PutUint16(buf[4:6], h.Version)
+	binary.BigEndian.PutUint16(buf[6:8], h.HashSize)
 	binary.BigEndian.PutUint32(buf[8:12], h.HashID)
 	return buf
 }
@@ -62,11 +62,11 @@ func ReadHeader(c Core) (Header, error) {
 		return Header{}, err
 	}
 	tag := Tag(tagByte & 0b0111_1111)
-	version, err := readShort(c)
+	version, err := readUint16(c)
 	if err != nil {
 		return Header{}, err
 	}
-	hashSize, err := readShort(c)
+	hashSize, err := readUint16(c)
 	if err != nil {
 		return Header{}, err
 	}
@@ -351,7 +351,7 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 	}
 
 	if length == 0 {
-		digestLen := int16(h.Size())
+		digestLen := uint16(h.Size())
 		db.Header = Header{
 			HashID:      hasher.ID,
 			HashSize:    digestLen,
@@ -373,7 +373,7 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 		if err := header.Validate(); err != nil {
 			return nil, err
 		}
-		digestLen := int16(h.Size())
+		digestLen := uint16(h.Size())
 		if header.HashSize != digestLen {
 			return nil, ErrInvalidHashSize
 		}
@@ -1828,7 +1828,7 @@ func (db *Database) readLinkedArrayListConcat(headerA, headerB LinkedArrayListHe
 
 // Compaction helpers
 
-func remapSlot(sourceCore, targetCore Core, hashSize int16, offsetMap map[int64]int64, slot Slot) (Slot, error) {
+func remapSlot(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, slot Slot) (Slot, error) {
 	switch slot.Tag {
 	case TagNone, TagUint, TagInt, TagFloat, TagShortBytes:
 		return slot, nil
@@ -1952,7 +1952,7 @@ func remapBytes(sourceCore, targetCore Core, slot Slot) (int64, error) {
 	return newOffset, nil
 }
 
-func remapIndex(sourceCore, targetCore Core, hashSize int16, offsetMap map[int64]int64, slot Slot) (int64, error) {
+func remapIndex(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, slot Slot) (int64, error) {
 	if err := sourceCore.SeekTo(slot.Value); err != nil {
 		return 0, err
 	}
@@ -1990,7 +1990,7 @@ func remapIndex(sourceCore, targetCore Core, hashSize int16, offsetMap map[int64
 	return newOffset, nil
 }
 
-func remapArrayList(sourceCore, targetCore Core, hashSize int16, offsetMap map[int64]int64, slot Slot) (int64, error) {
+func remapArrayList(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, slot Slot) (int64, error) {
 	if err := sourceCore.SeekTo(slot.Value); err != nil {
 		return 0, err
 	}
@@ -2025,7 +2025,7 @@ func remapArrayList(sourceCore, targetCore Core, hashSize int16, offsetMap map[i
 	return newOffset, nil
 }
 
-func remapLinkedArrayList(sourceCore, targetCore Core, hashSize int16, offsetMap map[int64]int64, slot Slot) (int64, error) {
+func remapLinkedArrayList(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, slot Slot) (int64, error) {
 	if err := sourceCore.SeekTo(slot.Value); err != nil {
 		return 0, err
 	}
@@ -2059,7 +2059,7 @@ func remapLinkedArrayList(sourceCore, targetCore Core, hashSize int16, offsetMap
 	return newOffset, nil
 }
 
-func remapLinkedArrayListBlock(sourceCore, targetCore Core, hashSize int16, offsetMap map[int64]int64, blockOffset int64) (int64, error) {
+func remapLinkedArrayListBlock(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, blockOffset int64) (int64, error) {
 	if mapped, ok := offsetMap[blockOffset]; ok {
 		return mapped, nil
 	}
@@ -2119,7 +2119,7 @@ func remapLinkedArrayListBlock(sourceCore, targetCore Core, hashSize int16, offs
 	return newOffset, nil
 }
 
-func remapHashMapOrSet(sourceCore, targetCore Core, hashSize int16, offsetMap map[int64]int64, slot Slot, counted bool) (int64, error) {
+func remapHashMapOrSet(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, slot Slot, counted bool) (int64, error) {
 	if err := sourceCore.SeekTo(slot.Value); err != nil {
 		return 0, err
 	}
@@ -2172,7 +2172,7 @@ func remapHashMapOrSet(sourceCore, targetCore Core, hashSize int16, offsetMap ma
 	return newOffset, nil
 }
 
-func remapKvPair(sourceCore, targetCore Core, hashSize int16, offsetMap map[int64]int64, slot Slot) (int64, error) {
+func remapKvPair(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, slot Slot) (int64, error) {
 	if err := sourceCore.SeekTo(slot.Value); err != nil {
 		return 0, err
 	}
