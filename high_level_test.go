@@ -72,11 +72,7 @@ func TestNotUsingArrayListAtTopLevel(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		rc, err := db.RootCursor()
-		if err != nil {
-			t.Fatal(err)
-		}
-		m, err := NewWriteHashMap(rc)
+		m, err := NewWriteHashMap(db.RootCursor())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -118,11 +114,7 @@ func TestNotUsingArrayListAtTopLevel(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rc, err := db.RootCursor()
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, err = NewWriteLinkedArrayList(rc)
+		_, err = NewWriteLinkedArrayList(db.RootCursor())
 		if err == nil {
 			t.Fatal("expected error for linked array list at top level")
 		}
@@ -143,11 +135,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rc, err := db.RootCursor()
-	if err != nil {
-		t.Fatal(err)
-	}
-	history, err := NewReadArrayList(&ReadCursor{SlotPtr: rc.SlotPtr, DB: rc.DB})
+	history, err := NewReadArrayList(db.RootCursor().ReadCursor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -579,11 +567,7 @@ func TestMultithreading(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rc, err := db.RootCursor()
-	if err != nil {
-		t.Fatal(err)
-	}
-	history, err := NewReadArrayList(&ReadCursor{SlotPtr: rc.SlotPtr, DB: rc.DB})
+	history, err := NewReadArrayList(db.RootCursor().ReadCursor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -613,12 +597,7 @@ func TestMultithreading(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		rc2, err := db2.RootCursor()
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		history2, err := NewReadArrayList(&ReadCursor{SlotPtr: rc2.SlotPtr, DB: rc2.DB})
+		history2, err := NewReadArrayList(db2.RootCursor().ReadCursor)
 		if err != nil {
 			t.Error(err)
 			return
@@ -689,11 +668,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, isFile bool) {
 
 	// first transaction
 	{
-		rc, err := db.RootCursor()
-		if err != nil {
-			t.Fatal(err)
-		}
-		history, err := NewWriteArrayList(rc)
+		history, err := NewWriteArrayList(db.RootCursor())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1202,11 +1177,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, isFile bool) {
 
 	// second transaction: modify data
 	{
-		rc, err := db.RootCursor()
-		if err != nil {
-			t.Fatal(err)
-		}
-		history, err := NewWriteArrayList(rc)
+		history, err := NewWriteArrayList(db.RootCursor())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1503,11 +1474,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, isFile bool) {
 
 	// old data hasn't changed
 	{
-		rc, err := db.RootCursor()
-		if err != nil {
-			t.Fatal(err)
-		}
-		history, err := NewWriteArrayList(rc)
+		history, err := NewWriteArrayList(db.RootCursor())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1625,11 +1592,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, isFile bool) {
 
 	// remove the last transaction with slice
 	{
-		rc, err := db.RootCursor()
-		if err != nil {
-			t.Fatal(err)
-		}
-		history, err := NewWriteArrayList(rc)
+		history, err := NewWriteArrayList(db.RootCursor())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1692,11 +1655,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, isFile bool) {
 
 	// cloning
 	{
-		rc, err := db.RootCursor()
-		if err != nil {
-			t.Fatal(err)
-		}
-		history, err := NewWriteArrayList(rc)
+		history, err := NewWriteArrayList(db.RootCursor())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1792,11 +1751,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, isFile bool) {
 
 	// accidental mutation when cloning inside a transaction
 	{
-		rc, err := db.RootCursor()
-		if err != nil {
-			t.Fatal(err)
-		}
-		history, err := NewWriteArrayList(rc)
+		history, err := NewWriteArrayList(db.RootCursor())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1911,11 +1866,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, isFile bool) {
 
 	// preventing accidental mutation with freezing
 	{
-		rc, err := db.RootCursor()
-		if err != nil {
-			t.Fatal(err)
-		}
-		history, err := NewWriteArrayList(rc)
+		history, err := NewWriteArrayList(db.RootCursor())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2101,11 +2052,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 
 		// moment 1
 		{
-			rc, err := source.RootCursor()
-			if err != nil {
-				t.Fatal(err)
-			}
-			history, err := NewWriteArrayList(rc)
+			history, err := NewWriteArrayList(source.RootCursor())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2137,11 +2084,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 
 		// moment 2
 		{
-			rc, err := source.RootCursor()
-			if err != nil {
-				t.Fatal(err)
-			}
-			history, err := NewWriteArrayList(rc)
+			history, err := NewWriteArrayList(source.RootCursor())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2273,11 +2216,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 
 		// moment 3
 		{
-			rc, err := source.RootCursor()
-			if err != nil {
-				t.Fatal(err)
-			}
-			history, err := NewWriteArrayList(rc)
+			history, err := NewWriteArrayList(source.RootCursor())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2319,11 +2258,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			t.Fatalf("target should be smaller: %d >= %d", targetSize, sourceSize)
 		}
 
-		crc, err := compacted.RootCursor()
-		if err != nil {
-			t.Fatal(err)
-		}
-		history, err := NewReadArrayList(&ReadCursor{SlotPtr: crc.SlotPtr, DB: crc.DB})
+		history, err := NewReadArrayList(compacted.RootCursor().ReadCursor)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2552,11 +2487,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 
 		// moment 1: create many keys
 		{
-			rc, err := source.RootCursor()
-			if err != nil {
-				t.Fatal(err)
-			}
-			history, err := NewWriteArrayList(rc)
+			history, err := NewWriteArrayList(source.RootCursor())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2588,11 +2519,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 
 		// moments 2-5: change only one key each time
 		for round := 0; round < 4; round++ {
-			rc, err := source.RootCursor()
-			if err != nil {
-				t.Fatal(err)
-			}
-			history, err := NewWriteArrayList(rc)
+			history, err := NewWriteArrayList(source.RootCursor())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2622,11 +2549,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			t.Fatal(err)
 		}
 
-		crc, err := compacted.RootCursor()
-		if err != nil {
-			t.Fatal(err)
-		}
-		history, err := NewReadArrayList(&ReadCursor{SlotPtr: crc.SlotPtr, DB: crc.DB})
+		history, err := NewReadArrayList(compacted.RootCursor().ReadCursor)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2680,11 +2603,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				t.Fatal(err)
 			}
 
-			rc, err := source.RootCursor()
-			if err != nil {
-				t.Fatal(err)
-			}
-			history, err := NewWriteArrayList(rc)
+			history, err := NewWriteArrayList(source.RootCursor())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2720,11 +2639,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				t.Fatal(err)
 			}
 
-			rrc, err := reopened.RootCursor()
-			if err != nil {
-				t.Fatal(err)
-			}
-			rHistory, err := NewReadArrayList(&ReadCursor{SlotPtr: rrc.SlotPtr, DB: rrc.DB})
+			rHistory, err := NewReadArrayList(reopened.RootCursor().ReadCursor)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2771,11 +2686,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				t.Fatal(err)
 			}
 
-			rc, err := source.RootCursor()
-			if err != nil {
-				t.Fatal(err)
-			}
-			history, err := NewWriteArrayList(rc)
+			history, err := NewWriteArrayList(source.RootCursor())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2805,11 +2716,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 
 			// add new moment to compacted DB
 			{
-				crc, err := compacted.RootCursor()
-				if err != nil {
-					t.Fatal(err)
-				}
-				cHistory, err := NewWriteArrayList(crc)
+				cHistory, err := NewWriteArrayList(compacted.RootCursor())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -2833,11 +2740,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				}
 			}
 
-			crc, err := compacted.RootCursor()
-			if err != nil {
-				t.Fatal(err)
-			}
-			cHistory, err := NewReadArrayList(&ReadCursor{SlotPtr: crc.SlotPtr, DB: crc.DB})
+			cHistory, err := NewReadArrayList(compacted.RootCursor().ReadCursor)
 			if err != nil {
 				t.Fatal(err)
 			}

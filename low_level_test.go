@@ -57,10 +57,7 @@ func TestLowLevelMemoryOperations(t *testing.T) {
 	}
 
 	hashVal := db.digest([]byte("text"))
-	textCursor, err := db.RootCursor()
-	if err != nil {
-		t.Fatal(err)
-	}
+	textCursor := db.RootCursor()
 	textCursor, err = textCursor.WritePath([]PathPart{
 		HashMapInitPart{},
 		HashMapGetPart{Target: HashMapGetValue{Hash: hashVal}},
@@ -112,10 +109,7 @@ func testSlice(t *testing.T, core Core, hasher Hasher, originalSize int, sliceOf
 	if err != nil {
 		t.Fatal(err)
 	}
-	rootCursor, err := db.RootCursor()
-	if err != nil {
-		t.Fatal(err)
-	}
+	rootCursor := db.RootCursor()
 
 	lastSlot, err := rootCursor.ReadPathSlot([]PathPart{ArrayListGet{Index: -1}})
 	if err != nil {
@@ -283,10 +277,7 @@ func testConcat(t *testing.T, core Core, hasher Hasher, listASize int64, listBSi
 	if err != nil {
 		t.Fatal(err)
 	}
-	rootCursor, err := db.RootCursor()
-	if err != nil {
-		t.Fatal(err)
-	}
+	rootCursor := db.RootCursor()
 
 	values := make([]int64, 0)
 
@@ -469,10 +460,7 @@ func testInsertAndRemove(t *testing.T, core Core, hasher Hasher, originalSize in
 	if err != nil {
 		t.Fatal(err)
 	}
-	rootCursor, err := db.RootCursor()
-	if err != nil {
-		t.Fatal(err)
-	}
+	rootCursor := db.RootCursor()
 
 	var insertValue int64 = 12345
 
@@ -784,10 +772,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rootCursor, err := db.RootCursor()
-		if err != nil {
-			t.Fatal(err)
-		}
+		rootCursor := db.RootCursor()
 
 		// write foo -> bar with a writer
 		fooKey := db.digest([]byte("foo"))
@@ -2122,10 +2107,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rootCursor, err := db.RootCursor()
-		if err != nil {
-			t.Fatal(err)
-		}
+		rootCursor := db.RootCursor()
 
 		watKey := db.digest([]byte("wat"))
 		for i := 0; i < SlotCount+1; i++ {
@@ -2265,10 +2247,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rootCursor, err := db.RootCursor()
-		if err != nil {
-			t.Fatal(err)
-		}
+		rootCursor := db.RootCursor()
 
 		for i := 0; i < SlotCount+1; i++ {
 			value := "wat" + strconv.Itoa(i)
@@ -2453,10 +2432,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rootCursor, err := db.RootCursor()
-		if err != nil {
-			t.Fatal(err)
-		}
+		rootCursor := db.RootCursor()
 
 		// add wats
 		for i := 0; i < 10; i++ {
@@ -2570,10 +2546,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rootCursor, err := db.RootCursor()
-		if err != nil {
-			t.Fatal(err)
-		}
+		rootCursor := db.RootCursor()
 
 		// add wats
 		for i := 0; i < 10; i++ {
@@ -2784,10 +2757,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rootCursor, err := db.RootCursor()
-		if err != nil {
-			t.Fatal(err)
-		}
+		rootCursor := db.RootCursor()
 
 		lastSlot, err := rootCursor.ReadPathSlot([]PathPart{ArrayListGet{Index: -1}})
 		if err != nil {
@@ -2928,10 +2898,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rootCursor, err := db.RootCursor()
-		if err != nil {
-			t.Fatal(err)
-		}
+		rootCursor := db.RootCursor()
 
 		// appending without setting any value should work
 		for i := 0; i < 8; i++ {
@@ -2988,10 +2955,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rootCursor, err := db.RootCursor()
-		if err != nil {
-			t.Fatal(err)
-		}
+		rootCursor := db.RootCursor()
 
 		lastSlot, err := rootCursor.ReadPathSlot([]PathPart{ArrayListGet{Index: -1}})
 		if err != nil {
@@ -3045,10 +3009,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rootCursor, err := db.RootCursor()
-		if err != nil {
-			t.Fatal(err)
-		}
+		rootCursor := db.RootCursor()
 
 		lastSlot, err := rootCursor.ReadPathSlot([]PathPart{ArrayListGet{Index: -1}})
 		if err != nil {

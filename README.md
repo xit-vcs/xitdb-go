@@ -575,8 +575,7 @@ compactCore := xitdb.NewCoreBufferedFile(compactFile)
 compactDb, _ := db.Compact(compactCore, hasher)
 
 // read from the new compacted db
-rc, _ := compactDb.RootCursor()
-history, _ := xitdb.NewReadArrayList(rc.ReadCursor)
+history, _ := xitdb.NewReadArrayList(compactDb.RootCursor().ReadCursor)
 historyCount, _ := history.Count()
 fmt.Println(historyCount) // 1
 ```

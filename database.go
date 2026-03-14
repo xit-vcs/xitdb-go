@@ -389,22 +389,21 @@ func (db *Database) digest(data []byte) []byte {
 	return db.hashFn(data)
 }
 
-func (db *Database) RootCursor() (*WriteCursor, error) {
+func (db *Database) RootCursor() *WriteCursor {
+	// if the header tag is none, try re-reading it.
+    // this may be necessary if the database was initialized on a different thread.
 	if db.Header.Tag == TagNone {
-		if err := db.Core.SeekTo(0); err != nil {
-			return nil, err
+		if err := db.Core.SeekTo(0); err == nil {
+			if header, err := ReadHeader(db.Core); err == nil {
+				db.Header = header
+			}
 		}
-		header, err := ReadHeader(db.Core)
-		if err != nil {
-			return nil, err
-		}
-		db.Header = header
 	}
 	rc := &ReadCursor{
 		SlotPtr: SlotPointer{Position: nil, Slot: Slot{Value: int64(DatabaseStart), Tag: db.Header.Tag}},
 		DB:      db,
 	}
-	return &WriteCursor{ReadCursor: rc}, nil
+	return &WriteCursor{ReadCursor: rc}
 }
 
 func (db *Database) Freeze() error {

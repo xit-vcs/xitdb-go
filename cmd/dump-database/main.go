@@ -454,14 +454,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	rootCursor, err := db.RootCursor()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error getting root cursor: %v\n", err)
-		os.Exit(1)
-	}
+	rc := db.RootCursor().ReadCursor
 
 	if jsonFlag {
-		v, err := toJsonValue(rootCursor.ReadCursor, true)
+		v, err := toJsonValue(rc, true)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -475,7 +471,7 @@ func main() {
 	} else {
 		fmt.Printf("Database: %s\n", filePath)
 		fmt.Println("---")
-		if err := printValue(rootCursor.ReadCursor, ""); err != nil {
+		if err := printValue(rc, ""); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
