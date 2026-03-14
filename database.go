@@ -417,10 +417,6 @@ func (db *Database) Freeze() error {
 }
 
 func (db *Database) Compact(targetCore Core, hasher Hasher) (*Database, error) {
-	return db.CompactWithHasher(targetCore, hasher)
-}
-
-func (db *Database) CompactWithHasher(targetCore Core, hasher Hasher) (*Database, error) {
 	offsetMap := make(map[int64]int64)
 	target, err := NewDatabase(targetCore, hasher)
 	if err != nil {
