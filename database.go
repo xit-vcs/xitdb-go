@@ -3,6 +3,7 @@ package xitdb
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"hash"
 	"math"
 	"math/big"
@@ -337,11 +338,11 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 	}
 
 	if err := core.SeekTo(0); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("seek: %w", err)
 	}
 	length, err := core.Length()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("length: %w", err)
 	}
 
 	if length == 0 {
@@ -354,18 +355,18 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 			MagicNumber: MagicNumber,
 		}
 		if err := db.Header.Write(core); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("write header: %w", err)
 		}
 		if err := core.Flush(); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("flush: %w", err)
 		}
 	} else {
 		header, err := ReadHeader(core)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("read header: %w", err)
 		}
 		if err := header.Validate(); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("validate header: %w", err)
 		}
 		digestLen := uint16(db.hash.Size())
 		if header.HashSize != digestLen {
@@ -373,7 +374,7 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 		}
 		db.Header = header
 		if err := db.truncate(); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("truncate: %w", err)
 		}
 	}
 
@@ -420,7 +421,7 @@ func (db *Database) Compact(targetCore Core, hasher Hasher) (*Database, error) {
 	offsetMap := make(map[int64]int64)
 	target, err := NewDatabase(targetCore, hasher)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("init target: %w", err)
 	}
 
 	if db.Header.Tag == TagNone {
@@ -432,15 +433,15 @@ func (db *Database) Compact(targetCore Core, hasher Hasher) (*Database, error) {
 
 	// read source's top-level ArrayListHeader
 	if err := db.Core.SeekTo(int64(DatabaseStart)); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read source header: %w", err)
 	}
 	var headerBytes [ArrayListHeaderLength]byte
 	if err := db.Core.Read(headerBytes[:]); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read source header: %w", err)
 	}
 	sourceHeader, err := ArrayListHeaderFromBytes(headerBytes[:])
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read source header: %w", err)
 	}
 	if sourceHeader.Size == 0 {
 		return target, nil
@@ -456,13 +457,13 @@ func (db *Database) Compact(targetCore Core, hasher Hasher) (*Database, error) {
 	}
 	lastSlotPtr, err := db.readArrayListSlot(sourceHeader.Ptr, lastKey, shift, ReadOnly, true)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read last slot: %w", err)
 	}
 	momentSlot := lastSlotPtr.Slot
 
 	// write TopLevelArrayListHeader + root index block to target
 	if err := target.Core.SeekTo(int64(DatabaseStart)); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("write target header: %w", err)
 	}
 	targetArrayListPtr := int64(DatabaseStart) + int64(TopLevelArrayListHeaderLength)
 	tlHeader := TopLevelArrayListHeader{
@@ -471,52 +472,52 @@ func (db *Database) Compact(targetCore Core, hasher Hasher) (*Database, error) {
 	}
 	tlBytes := tlHeader.ToBytes()
 	if err := target.Core.Write(tlBytes[:]); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("write target header: %w", err)
 	}
 	if err := target.Core.Write(make([]byte, IndexBlockSize)); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("write target index block: %w", err)
 	}
 
 	// recursively remap the moment slot
 	remappedMoment, err := remapSlot(db.Core, target.Core, db.Header.HashSize, offsetMap, momentSlot)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("remap: %w", err)
 	}
 
 	// write remapped moment slot into position 0 of target's root index block
 	if err := target.Core.SeekTo(targetArrayListPtr); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("write remapped slot: %w", err)
 	}
 	remappedBytes := remappedMoment.ToBytes()
 	if err := target.Core.Write(remappedBytes[:]); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("write remapped slot: %w", err)
 	}
 
 	// update target's DatabaseHeader tag
 	target.Header = target.Header.WithTag(TagArrayList)
 	if err := target.Core.SeekTo(0); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("write target db header: %w", err)
 	}
 	if err := target.Header.Write(target.Core); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("write target db header: %w", err)
 	}
 
 	// flush, update file_size, flush again
 	if err := target.Core.Flush(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("flush: %w", err)
 	}
 	fileSize, err := target.Core.Length()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get file size: %w", err)
 	}
 	if err := target.Core.SeekTo(int64(DatabaseStart) + int64(ArrayListHeaderLength)); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("write file size: %w", err)
 	}
 	if err := writeLong(target.Core, fileSize); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("write file size: %w", err)
 	}
 	if err := target.Core.Flush(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("final flush: %w", err)
 	}
 
 	return target, nil
