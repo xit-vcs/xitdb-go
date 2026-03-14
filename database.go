@@ -35,7 +35,7 @@ const (
 const HeaderLength = 12
 
 type Header struct {
-	HashID      int32
+	HashID      uint32
 	HashSize    int16
 	Version     int16
 	Tag         Tag
@@ -48,7 +48,7 @@ func (h Header) ToBytes() [HeaderLength]byte {
 	buf[3] = byte(h.Tag)
 	binary.BigEndian.PutUint16(buf[4:6], uint16(h.Version))
 	binary.BigEndian.PutUint16(buf[6:8], uint16(h.HashSize))
-	binary.BigEndian.PutUint32(buf[8:12], uint32(h.HashID))
+	binary.BigEndian.PutUint32(buf[8:12], h.HashID)
 	return buf
 }
 
@@ -70,7 +70,7 @@ func ReadHeader(c Core) (Header, error) {
 	if err != nil {
 		return Header{}, err
 	}
-	hashID, err := readInt32(c)
+	hashID, err := readUint32(c)
 	if err != nil {
 		return Header{}, err
 	}

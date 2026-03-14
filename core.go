@@ -53,16 +53,16 @@ func writeByte_(c Core, v byte) error {
 	return c.Write([]byte{v})
 }
 
-func readInt32(c Core) (int32, error) {
+func readUint32(c Core) (uint32, error) {
 	var buf [4]byte
 	if err := c.Read(buf[:]); err != nil {
 		return 0, err
 	}
-	return int32(binary.BigEndian.Uint32(buf[:])), nil
+	return binary.BigEndian.Uint32(buf[:]), nil
 }
 
-func writeInt32(c Core, v int32) error {
+func writeUint32(c Core, v uint32) error {
 	var buf [4]byte
-	binary.BigEndian.PutUint32(buf[:], uint32(v))
+	binary.BigEndian.PutUint32(buf[:], v)
 	return c.Write(buf[:])
 }
