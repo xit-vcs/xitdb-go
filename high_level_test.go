@@ -29,7 +29,7 @@ func TestHighLevelApi(t *testing.T) {
 	{
 		core := NewCoreMemory()
 		hasher := sha1Hasher()
-		testHighLevelApi(t, core, hasher, false)
+		testHighLevelApi(t, core, hasher, nil)
 	}
 
 	// CoreFile
@@ -43,7 +43,7 @@ func TestHighLevelApi(t *testing.T) {
 
 		core := NewCoreFile(f)
 		hasher := sha1Hasher()
-		testHighLevelApi(t, core, hasher, true)
+		testHighLevelApi(t, core, hasher, f)
 	}
 
 	// CoreBufferedFile
@@ -57,7 +57,7 @@ func TestHighLevelApi(t *testing.T) {
 
 		core := NewCoreBufferedFileWithSize(f, 1024)
 		hasher := sha1Hasher()
-		testHighLevelApi(t, core, hasher, true)
+		testHighLevelApi(t, core, hasher, f)
 	}
 }
 
@@ -652,7 +652,7 @@ func TestMultithreading(t *testing.T) {
 	<-done2
 }
 
-func testHighLevelApi(t *testing.T, core Core, hasher Hasher, isFile bool) {
+func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File) {
 	t.Helper()
 	maxRead := ptrInt64(1024)
 
@@ -1620,7 +1620,10 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, isFile bool) {
 		assertEqual(t, "foo", string(fooValue))
 	}
 
-	// junk data is cleaned up on reinit
+	// the db size remains the same after writing junk data
+	// and then reinitializing the db. this is useful because
+	// there could be data from a transaction that never
+	// completed due to an unclean shutdown.
 	{
 		coreLen, err := core.Length()
 		if err != nil {
@@ -1635,9 +1638,18 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, isFile bool) {
 			t.Fatal(err)
 		}
 
-		// re-open in read-only mode if file
-		if isFile {
-			// no error is thrown
+		// no error is thrown if db file is opened in read-only mode
+		if fileMaybe != nil {
+			readOnlyFile, err := os.Open(fileMaybe.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer readOnlyFile.Close()
+			readOnlyCore := NewCoreFile(readOnlyFile)
+			_, err = NewDatabase(readOnlyCore, hasher)
+			if err != nil {
+				t.Fatal(err)
+			}
 		}
 
 		db, err = NewDatabase(core, hasher)

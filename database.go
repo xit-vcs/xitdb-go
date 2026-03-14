@@ -372,7 +372,9 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 			return nil, ErrInvalidHashSize
 		}
 		db.Header = header
-		db.truncate()
+		if err := db.truncate(); err != nil {
+			return nil, err
+		}
 	}
 
 	db.TxStart = nil
@@ -526,9 +528,9 @@ func (db *Database) CompactWithHasher(targetCore Core, hasher Hasher) (*Database
 
 // truncate
 
-func (db *Database) truncate() {
+func (db *Database) truncate() error {
 	if db.Header.Tag != TagArrayList {
-		return
+		return nil
 	}
 
 	rc := &ReadCursor{
@@ -537,25 +539,35 @@ func (db *Database) truncate() {
 	}
 	wc := &WriteCursor{ReadCursor: rc}
 	listSize, err := wc.Count()
-	if err != nil || listSize == 0 {
-		return
+	if err != nil {
+		return err
+	}
+	if listSize == 0 {
+		return nil
 	}
 
 	if err := db.Core.SeekTo(int64(DatabaseStart) + int64(ArrayListHeaderLength)); err != nil {
-		return
+		return err
 	}
 	headerFileSize, err := readLong(db.Core)
-	if err != nil || headerFileSize == 0 {
-		return
+	if err != nil {
+		return err
+	}
+	if headerFileSize == 0 {
+		return nil
 	}
 
 	fileSize, err := db.Core.Length()
-	if err != nil || fileSize == headerFileSize {
-		return
+	if err != nil {
+		return err
+	}
+	if fileSize == headerFileSize {
+		return nil
 	}
 
 	// ignore error because the file may be open in read-only mode
 	_ = db.Core.SetLength(headerFileSize)
+	return nil
 }
 
 // checkHash
