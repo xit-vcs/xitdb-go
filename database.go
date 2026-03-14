@@ -3,6 +3,7 @@ package xitdb
 import (
 	"bytes"
 	"encoding/binary"
+	"hash"
 	"math"
 	"math/big"
 )
@@ -323,21 +324,16 @@ type ContextFunction func(cursor *WriteCursor) error
 // Database
 
 type Database struct {
-	Core    Core
-	hashFn  func(data []byte) []byte
-	Header  Header
+	Core   Core
+	hash   hash.Hash
+	Header Header
 	TxStart *int64
 }
 
 func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 	db := &Database{
 		Core: core,
-	}
-
-	db.hashFn = func(data []byte) []byte {
-		hasher.Hash.Reset()
-		hasher.Hash.Write(data)
-		return hasher.Hash.Sum(nil)
+		hash: hasher.Hash,
 	}
 
 	if err := core.SeekTo(0); err != nil {
@@ -349,7 +345,7 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 	}
 
 	if length == 0 {
-		digestLen := uint16(hasher.Hash.Size())
+		digestLen := uint16(db.hash.Size())
 		db.Header = Header{
 			HashID:      hasher.ID,
 			HashSize:    digestLen,
@@ -371,7 +367,7 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 		if err := header.Validate(); err != nil {
 			return nil, err
 		}
-		digestLen := uint16(hasher.Hash.Size())
+		digestLen := uint16(db.hash.Size())
 		if header.HashSize != digestLen {
 			return nil, ErrInvalidHashSize
 		}
@@ -384,7 +380,9 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 }
 
 func (db *Database) digest(data []byte) []byte {
-	return db.hashFn(data)
+	db.hash.Reset()
+	db.hash.Write(data)
+	return db.hash.Sum(nil)
 }
 
 func (db *Database) RootCursor() *WriteCursor {
