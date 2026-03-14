@@ -191,7 +191,10 @@ fruits, err := xitdb.NewReadArrayList(fruitsCursor)
 if err != nil {
     log.Fatal(err)
 }
-fruitsCount, _ := fruits.Count()
+fruitsCount, err := fruits.Count()
+if err != nil {
+    log.Fatal(err)
+}
 fmt.Println(fruitsCount) // 3
 
 // now we can get the first item from the fruits list and read it
@@ -244,15 +247,23 @@ In xitdb, you can optionally store a format tag with a byte array. A format tag 
 ```go
 randomBigInt := make([]byte, 32)
 rand.Read(randomBigInt)
-moment.PutString("random-number", xitdb.NewBytesDataWithFormat(randomBigInt, []byte("bi")))
+if err := moment.PutString("random-number", xitdb.NewBytesDataWithFormat(randomBigInt, []byte("bi"))); err != nil {
+    return err
+}
 ```
 
 Then, you can read it like this:
 
 ```go
-randomNumberCursor, _ := moment.GetCursorByString("random-number")
+randomNumberCursor, err := moment.GetCursorByString("random-number")
+if err != nil {
+    log.Fatal(err)
+}
 maxRead := int64(1024)
-randomNumber, _ := randomNumberCursor.ReadBytesObject(&maxRead)
+randomNumber, err := randomNumberCursor.ReadBytesObject(&maxRead)
+if err != nil {
+    log.Fatal(err)
+}
 fmt.Println(string(randomNumber.FormatTag)) // "bi"
 bigInt := new(big.Int).SetBytes(randomNumber.Value)
 ```
@@ -264,96 +275,203 @@ There are many types you may want to store this way. Maybe an ISO-8601 date like
 A powerful feature of immutable data is fast cloning. Any data structure can be instantly cloned and changed without affecting the original. Starting with the example code above, we can make a new transaction that creates a "food" list based on the existing "fruits" list:
 
 ```go
-lastSlot, _ := history.GetSlotAt(-1)
+lastSlot, err := history.GetSlotAt(-1)
+if err != nil {
+    log.Fatal(err)
+}
 var slotData xitdb.WriteableData
 if lastSlot != nil {
     slotData = *lastSlot
 }
 
-history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
-    moment, _ := xitdb.NewWriteHashMap(cursor)
+err = history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
+    moment, err := xitdb.NewWriteHashMap(cursor)
+    if err != nil {
+        return err
+    }
 
-    fruitsCursor, _ := moment.GetCursorByString("fruits")
-    fruits, _ := xitdb.NewReadArrayList(fruitsCursor)
+    fruitsCursor, err := moment.GetCursorByString("fruits")
+    if err != nil {
+        return err
+    }
+    fruits, err := xitdb.NewReadArrayList(fruitsCursor)
+    if err != nil {
+        return err
+    }
 
     // create a new key called "food" whose initial value is
     // based on the "fruits" list
-    foodCursor, _ := moment.PutCursorByString("food")
+    foodCursor, err := moment.PutCursorByString("food")
+    if err != nil {
+        return err
+    }
     foodCursor.WriteValue(fruits.GetSlot())
 
-    food, _ := xitdb.NewWriteArrayList(foodCursor)
-    food.Append(xitdb.NewBytesDataFromString("eggs"))
-    food.Append(xitdb.NewBytesDataFromString("rice"))
-    food.Append(xitdb.NewBytesDataFromString("fish"))
+    food, err := xitdb.NewWriteArrayList(foodCursor)
+    if err != nil {
+        return err
+    }
+    if err := food.Append(xitdb.NewBytesDataFromString("eggs")); err != nil {
+        return err
+    }
+    if err := food.Append(xitdb.NewBytesDataFromString("rice")); err != nil {
+        return err
+    }
+    if err := food.Append(xitdb.NewBytesDataFromString("fish")); err != nil {
+        return err
+    }
 
     return nil
 })
+if err != nil {
+    log.Fatal(err)
+}
 
-momentCursor, _ := history.GetCursor(-1)
-moment, _ := xitdb.NewReadHashMap(momentCursor)
+momentCursor, err := history.GetCursor(-1)
+if err != nil {
+    log.Fatal(err)
+}
+moment, err := xitdb.NewReadHashMap(momentCursor)
+if err != nil {
+    log.Fatal(err)
+}
 
 // the food list includes the fruits
-foodCursor, _ := moment.GetCursorByString("food")
-food, _ := xitdb.NewReadArrayList(foodCursor)
-foodCount, _ := food.Count()
+foodCursor, err := moment.GetCursorByString("food")
+if err != nil {
+    log.Fatal(err)
+}
+food, err := xitdb.NewReadArrayList(foodCursor)
+if err != nil {
+    log.Fatal(err)
+}
+foodCount, err := food.Count()
+if err != nil {
+    log.Fatal(err)
+}
 fmt.Println(foodCount) // 6
 
 // ...but the fruits list hasn't been changed
-fruitsCursor, _ := moment.GetCursorByString("fruits")
-fruits, _ := xitdb.NewReadArrayList(fruitsCursor)
-fruitsCount, _ := fruits.Count()
+fruitsCursor, err := moment.GetCursorByString("fruits")
+if err != nil {
+    log.Fatal(err)
+}
+fruits, err := xitdb.NewReadArrayList(fruitsCursor)
+if err != nil {
+    log.Fatal(err)
+}
+fruitsCount, err := fruits.Count()
+if err != nil {
+    log.Fatal(err)
+}
 fmt.Println(fruitsCount) // 3
 ```
 
 Before we continue, let's save the latest history index, so we can revert back to this moment of the database later:
 
 ```go
-historyCount, _ := history.Count()
+historyCount, err := history.Count()
+if err != nil {
+    log.Fatal(err)
+}
 historyIndex := historyCount - 1
 ```
 
 There's one catch you'll run into when cloning. If we try cloning a data structure that was created in the same transaction, it doesn't seem to work:
 
 ```go
-lastSlot, _ := history.GetSlotAt(-1)
+lastSlot, err := history.GetSlotAt(-1)
+if err != nil {
+    log.Fatal(err)
+}
 var slotData xitdb.WriteableData
 if lastSlot != nil {
     slotData = *lastSlot
 }
 
-history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
-    moment, _ := xitdb.NewWriteHashMap(cursor)
+err = history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
+    moment, err := xitdb.NewWriteHashMap(cursor)
+    if err != nil {
+        return err
+    }
 
-    bigCitiesCursor, _ := moment.PutCursorByString("big-cities")
-    bigCities, _ := xitdb.NewWriteArrayList(bigCitiesCursor)
-    bigCities.Append(xitdb.NewBytesDataFromString("New York, NY"))
-    bigCities.Append(xitdb.NewBytesDataFromString("Los Angeles, CA"))
+    bigCitiesCursor, err := moment.PutCursorByString("big-cities")
+    if err != nil {
+        return err
+    }
+    bigCities, err := xitdb.NewWriteArrayList(bigCitiesCursor)
+    if err != nil {
+        return err
+    }
+    if err := bigCities.Append(xitdb.NewBytesDataFromString("New York, NY")); err != nil {
+        return err
+    }
+    if err := bigCities.Append(xitdb.NewBytesDataFromString("Los Angeles, CA")); err != nil {
+        return err
+    }
 
     // create a new key called "cities" whose initial value is
     // based on the "big-cities" list
-    citiesCursor, _ := moment.PutCursorByString("cities")
+    citiesCursor, err := moment.PutCursorByString("cities")
+    if err != nil {
+        return err
+    }
     citiesCursor.WriteValue(bigCities.GetSlot())
 
-    cities, _ := xitdb.NewWriteArrayList(citiesCursor)
-    cities.Append(xitdb.NewBytesDataFromString("Charleston, SC"))
-    cities.Append(xitdb.NewBytesDataFromString("Louisville, KY"))
+    cities, err := xitdb.NewWriteArrayList(citiesCursor)
+    if err != nil {
+        return err
+    }
+    if err := cities.Append(xitdb.NewBytesDataFromString("Charleston, SC")); err != nil {
+        return err
+    }
+    if err := cities.Append(xitdb.NewBytesDataFromString("Louisville, KY")); err != nil {
+        return err
+    }
 
     return nil
 })
+if err != nil {
+    log.Fatal(err)
+}
 
-momentCursor, _ := history.GetCursor(-1)
-moment, _ := xitdb.NewReadHashMap(momentCursor)
+momentCursor, err := history.GetCursor(-1)
+if err != nil {
+    log.Fatal(err)
+}
+moment, err := xitdb.NewReadHashMap(momentCursor)
+if err != nil {
+    log.Fatal(err)
+}
 
 // the cities list contains all four
-citiesCursor, _ := moment.GetCursorByString("cities")
-cities, _ := xitdb.NewReadArrayList(citiesCursor)
-citiesCount, _ := cities.Count()
+citiesCursor, err := moment.GetCursorByString("cities")
+if err != nil {
+    log.Fatal(err)
+}
+cities, err := xitdb.NewReadArrayList(citiesCursor)
+if err != nil {
+    log.Fatal(err)
+}
+citiesCount, err := cities.Count()
+if err != nil {
+    log.Fatal(err)
+}
 fmt.Println(citiesCount) // 4
 
 // ..but so does big-cities! we did not intend to mutate this
-bigCitiesCursor, _ := moment.GetCursorByString("big-cities")
-bigCities, _ := xitdb.NewReadArrayList(bigCitiesCursor)
-bigCitiesCount, _ := bigCities.Count()
+bigCitiesCursor, err := moment.GetCursorByString("big-cities")
+if err != nil {
+    log.Fatal(err)
+}
+bigCities, err := xitdb.NewReadArrayList(bigCitiesCursor)
+if err != nil {
+    log.Fatal(err)
+}
+bigCitiesCount, err := bigCities.Count()
+if err != nil {
+    log.Fatal(err)
+}
 fmt.Println(bigCitiesCount) // 4
 ```
 
@@ -362,55 +480,115 @@ The reason that `big-cities` was mutated is because all data in a given transact
 To show how to fix this, let's first undo the transaction we just made. Here we use the `historyIndex` we saved before to revert back to the older database moment:
 
 ```go
-historySlot, _ := history.GetSlotAt(historyIndex)
-history.Append(*historySlot)
+historySlot, err := history.GetSlotAt(historyIndex)
+if err != nil {
+    log.Fatal(err)
+}
+if err := history.Append(*historySlot); err != nil {
+    log.Fatal(err)
+}
 ```
 
 This time, after making the "big cities" list, we call `Freeze`, which tells xitdb to consider all data made so far in the transaction to be immutable. After that, we can clone it into the "cities" list and it will work the way we wanted:
 
 ```go
-lastSlot, _ := history.GetSlotAt(-1)
+lastSlot, err := history.GetSlotAt(-1)
+if err != nil {
+    log.Fatal(err)
+}
 var slotData xitdb.WriteableData
 if lastSlot != nil {
     slotData = *lastSlot
 }
 
-history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
-    moment, _ := xitdb.NewWriteHashMap(cursor)
+err = history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
+    moment, err := xitdb.NewWriteHashMap(cursor)
+    if err != nil {
+        return err
+    }
 
-    bigCitiesCursor, _ := moment.PutCursorByString("big-cities")
-    bigCities, _ := xitdb.NewWriteArrayList(bigCitiesCursor)
-    bigCities.Append(xitdb.NewBytesDataFromString("New York, NY"))
-    bigCities.Append(xitdb.NewBytesDataFromString("Los Angeles, CA"))
+    bigCitiesCursor, err := moment.PutCursorByString("big-cities")
+    if err != nil {
+        return err
+    }
+    bigCities, err := xitdb.NewWriteArrayList(bigCitiesCursor)
+    if err != nil {
+        return err
+    }
+    if err := bigCities.Append(xitdb.NewBytesDataFromString("New York, NY")); err != nil {
+        return err
+    }
+    if err := bigCities.Append(xitdb.NewBytesDataFromString("Los Angeles, CA")); err != nil {
+        return err
+    }
 
     // freeze here, so big-cities won't be mutated
-    cursor.DB.Freeze()
+    if err := cursor.DB.Freeze(); err != nil {
+        return err
+    }
 
     // create a new key called "cities" whose initial value is
     // based on the "big-cities" list
-    citiesCursor, _ := moment.PutCursorByString("cities")
+    citiesCursor, err := moment.PutCursorByString("cities")
+    if err != nil {
+        return err
+    }
     citiesCursor.WriteValue(bigCities.GetSlot())
 
-    cities, _ := xitdb.NewWriteArrayList(citiesCursor)
-    cities.Append(xitdb.NewBytesDataFromString("Charleston, SC"))
-    cities.Append(xitdb.NewBytesDataFromString("Louisville, KY"))
+    cities, err := xitdb.NewWriteArrayList(citiesCursor)
+    if err != nil {
+        return err
+    }
+    if err := cities.Append(xitdb.NewBytesDataFromString("Charleston, SC")); err != nil {
+        return err
+    }
+    if err := cities.Append(xitdb.NewBytesDataFromString("Louisville, KY")); err != nil {
+        return err
+    }
 
     return nil
 })
+if err != nil {
+    log.Fatal(err)
+}
 
-momentCursor, _ := history.GetCursor(-1)
-moment, _ := xitdb.NewReadHashMap(momentCursor)
+momentCursor, err := history.GetCursor(-1)
+if err != nil {
+    log.Fatal(err)
+}
+moment, err := xitdb.NewReadHashMap(momentCursor)
+if err != nil {
+    log.Fatal(err)
+}
 
 // the cities list contains all four
-citiesCursor, _ := moment.GetCursorByString("cities")
-cities, _ := xitdb.NewReadArrayList(citiesCursor)
-citiesCount, _ := cities.Count()
+citiesCursor, err := moment.GetCursorByString("cities")
+if err != nil {
+    log.Fatal(err)
+}
+cities, err := xitdb.NewReadArrayList(citiesCursor)
+if err != nil {
+    log.Fatal(err)
+}
+citiesCount, err := cities.Count()
+if err != nil {
+    log.Fatal(err)
+}
 fmt.Println(citiesCount) // 4
 
 // and big-cities only contains the original two
-bigCitiesCursor, _ := moment.GetCursorByString("big-cities")
-bigCities, _ := xitdb.NewReadArrayList(bigCitiesCursor)
-bigCitiesCount, _ := bigCities.Count()
+bigCitiesCursor, err := moment.GetCursorByString("big-cities")
+if err != nil {
+    log.Fatal(err)
+}
+bigCities, err := xitdb.NewReadArrayList(bigCitiesCursor)
+if err != nil {
+    log.Fatal(err)
+}
+bigCitiesCount, err := bigCities.Count()
+if err != nil {
+    log.Fatal(err)
+}
 fmt.Println(bigCitiesCount) // 2
 ```
 
@@ -419,14 +597,22 @@ fmt.Println(bigCitiesCount) // 2
 When reading and writing large byte arrays, you probably don't want to have all of their contents in memory at once. To incrementally write to a byte array, just get a writer from a cursor:
 
 ```go
-longTextCursor, _ := moment.PutCursorByString("long-text")
-cursorWriter, _ := longTextCursor.Writer()
+longTextCursor, err := moment.PutCursorByString("long-text")
+if err != nil {
+    return err
+}
+cursorWriter, err := longTextCursor.Writer()
+if err != nil {
+    return err
+}
 bw := bufio.NewWriter(cursorWriter)
 for i := 0; i < 50; i++ {
     bw.Write([]byte("hello, world\n"))
 }
 bw.Flush()
-cursorWriter.Finish() // remember to call this!
+if err := cursorWriter.Finish(); err != nil {
+    return err
+}
 ```
 
 If you need to set a format tag for the byte array, set the `formatTag` field on the writer before you call `Finish`.
@@ -434,8 +620,14 @@ If you need to set a format tag for the byte array, set the `formatTag` field on
 To read a byte array incrementally, get a reader from a cursor:
 
 ```go
-longTextCursor, _ := moment.GetCursorByString("long-text")
-cursorReader, _ := longTextCursor.Reader()
+longTextCursor, err := moment.GetCursorByString("long-text")
+if err != nil {
+    log.Fatal(err)
+}
+cursorReader, err := longTextCursor.Reader()
+if err != nil {
+    log.Fatal(err)
+}
 scanner := bufio.NewScanner(cursorReader)
 count := 0
 for scanner.Scan() {
@@ -449,36 +641,63 @@ fmt.Println(count) // 50
 All data structures support iteration using Go 1.23's range-over-func iterators. Here's an example of iterating over an `ArrayList` and printing all of the keys and values of each `HashMap` contained in it:
 
 ```go
-peopleCursor, _ := moment.GetCursorByString("people")
-people, _ := xitdb.NewReadArrayList(peopleCursor)
+peopleCursor, err := moment.GetCursorByString("people")
+if err != nil {
+    log.Fatal(err)
+}
+people, err := xitdb.NewReadArrayList(peopleCursor)
+if err != nil {
+    log.Fatal(err)
+}
 
 for personCursor, err := range people.All() {
     if err != nil {
         log.Fatal(err)
     }
-    person, _ := xitdb.NewReadHashMap(personCursor)
+    person, err := xitdb.NewReadHashMap(personCursor)
+    if err != nil {
+        log.Fatal(err)
+    }
 
     for kvPairCursor, err := range person.All() {
         if err != nil {
             log.Fatal(err)
         }
-        kvPair, _ := kvPairCursor.ReadKeyValuePair()
+        kvPair, err := kvPairCursor.ReadKeyValuePair()
+        if err != nil {
+            log.Fatal(err)
+        }
 
         maxRead := int64(1024)
-        key, _ := kvPair.KeyCursor.ReadBytes(&maxRead)
+        key, err := kvPair.KeyCursor.ReadBytes(&maxRead)
+        if err != nil {
+            log.Fatal(err)
+        }
 
         switch kvPair.ValueCursor.SlotPtr.Slot.Tag {
         case xitdb.TagShortBytes, xitdb.TagBytes:
-            val, _ := kvPair.ValueCursor.ReadBytes(&maxRead)
+            val, err := kvPair.ValueCursor.ReadBytes(&maxRead)
+            if err != nil {
+                log.Fatal(err)
+            }
             fmt.Printf("%s: %s\n", key, val)
         case xitdb.TagUint:
-            val, _ := kvPair.ValueCursor.ReadUint()
+            val, err := kvPair.ValueCursor.ReadUint()
+            if err != nil {
+                log.Fatal(err)
+            }
             fmt.Printf("%s: %d\n", key, val)
         case xitdb.TagInt:
-            val, _ := kvPair.ValueCursor.ReadInt()
+            val, err := kvPair.ValueCursor.ReadInt()
+            if err != nil {
+                log.Fatal(err)
+            }
             fmt.Printf("%s: %d\n", key, val)
         case xitdb.TagFloat:
-            val, _ := kvPair.ValueCursor.ReadFloat()
+            val, err := kvPair.ValueCursor.ReadFloat()
+            if err != nil {
+                log.Fatal(err)
+            }
             fmt.Printf("%s: %f\n", key, val)
         }
     }
@@ -496,26 +715,40 @@ The hashing data structures will create the hash for you when you call methods l
 When initializing a database, you tell xitdb how to hash with the `Hasher`. If you're using SHA-1, it will look like this:
 
 ```go
-f, _ := os.OpenFile("main.db", os.O_RDWR|os.O_CREATE, 0644)
+f, err := os.OpenFile("main.db", os.O_RDWR|os.O_CREATE, 0644)
+if err != nil {
+    log.Fatal(err)
+}
 defer f.Close()
 
 core := xitdb.NewCoreFile(f)
 hasher := xitdb.Hasher{NewHash: func() hash.Hash { return sha1.New() }}
-db, _ := xitdb.NewDatabase(core, hasher)
+db, err := xitdb.NewDatabase(core, hasher)
+if err != nil {
+    log.Fatal(err)
+}
 ```
 
 The size of the hash in bytes will be stored in the database's header. If you try opening it later with a hashing algorithm that has the wrong hash size, it will return an error. If you are unsure what hash size the database uses, this creates a chicken-and-egg problem. You can read the header before initializing the database like this:
 
 ```go
-core.SeekTo(0)
-header, _ := xitdb.ReadHeader(core)
+if err := core.SeekTo(0); err != nil {
+    log.Fatal(err)
+}
+header, err := xitdb.ReadHeader(core)
+if err != nil {
+    log.Fatal(err)
+}
 fmt.Println(header.HashSize) // 20
 ```
 
 The hash size alone does not disambiguate hashing algorithms, though. In addition, xitdb reserves four bytes in the header that you can use to put the name of the algorithm. You must provide it in the `Hasher`:
 
 ```go
-id, _ := xitdb.StringToID("sha1")
+id, err := xitdb.StringToID("sha1")
+if err != nil {
+    log.Fatal(err)
+}
 hasher := xitdb.Hasher{
     NewHash: func() hash.Hash { return sha1.New() },
     ID:      id,
@@ -525,16 +758,26 @@ hasher := xitdb.Hasher{
 The hash id is only written to the database header when it is first initialized. When you open it later, the hash id in the `Hasher` is ignored. You can read the hash id of an existing database like this:
 
 ```go
-core.SeekTo(0)
-header, _ := xitdb.ReadHeader(core)
+if err := core.SeekTo(0); err != nil {
+    log.Fatal(err)
+}
+header, err := xitdb.ReadHeader(core)
+if err != nil {
+    log.Fatal(err)
+}
 fmt.Println(xitdb.IDToString(header.HashID)) // "sha1"
 ```
 
 If you want to use SHA-256, I recommend using `sha2` as the hash id. You can then distinguish between SHA-256 and SHA-512 using the hash size, like this:
 
 ```go
-core.SeekTo(0)
-header, _ := xitdb.ReadHeader(core)
+if err := core.SeekTo(0); err != nil {
+    log.Fatal(err)
+}
+header, err := xitdb.ReadHeader(core)
+if err != nil {
+    log.Fatal(err)
+}
 
 var hasher xitdb.Hasher
 switch xitdb.IDToString(header.HashID) {
@@ -568,15 +811,27 @@ default:
 Normally, an immutable database grows forever, because old data is never deleted. To reclaim disk space and clear the history, xitdb supports compaction. This involves completely rebuilding the database file to only contain the data accessible from the latest copy (i.e., "moment") of the database.
 
 ```go
-compactFile, _ := os.OpenFile("compact.db", os.O_RDWR|os.O_CREATE, 0644)
+compactFile, err := os.OpenFile("compact.db", os.O_RDWR|os.O_CREATE, 0644)
+if err != nil {
+    log.Fatal(err)
+}
 defer compactFile.Close()
 
 compactCore := xitdb.NewCoreBufferedFile(compactFile)
-compactDb, _ := db.Compact(compactCore, hasher)
+compactDb, err := db.Compact(compactCore, hasher)
+if err != nil {
+    log.Fatal(err)
+}
 
 // read from the new compacted db
-history, _ := xitdb.NewReadArrayList(compactDb.RootCursor().ReadCursor)
-historyCount, _ := history.Count()
+history, err := xitdb.NewReadArrayList(compactDb.RootCursor().ReadCursor)
+if err != nil {
+    log.Fatal(err)
+}
+historyCount, err := history.Count()
+if err != nil {
+    log.Fatal(err)
+}
 fmt.Println(historyCount) // 1
 ```
 
