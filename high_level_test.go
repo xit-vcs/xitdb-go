@@ -154,7 +154,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		fooValue, err := fooCursor.ReadBytes(ptrInt64(1024))
+		fooValue, err := fooCursor.ReadBytes(int64(1024))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -189,7 +189,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		appleValue, err := appleCursor.ReadBytes(ptrInt64(1024))
+		appleValue, err := appleCursor.ReadBytes(int64(1024))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -245,7 +245,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		todoValue, err := todoCursor.ReadBytes(ptrInt64(1024))
+		todoValue, err := todoCursor.ReadBytes(int64(1024))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -296,7 +296,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				_, err = kvPair.KeyCursor.ReadBytes(ptrInt64(1024))
+				_, err = kvPair.KeyCursor.ReadBytes(int64(1024))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -339,7 +339,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				_, err = kvPair.KeyCursor.ReadBytes(ptrInt64(1024))
+				_, err = kvPair.KeyCursor.ReadBytes(int64(1024))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -373,7 +373,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				_, err = kvPair.KeyCursor.ReadBytes(ptrInt64(1024))
+				_, err = kvPair.KeyCursor.ReadBytes(int64(1024))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -406,7 +406,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		fruitsKeyValue, err := fruitsKeyCursor.ReadBytes(ptrInt64(1024))
+		fruitsKeyValue, err := fruitsKeyCursor.ReadBytes(int64(1024))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -437,7 +437,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		lemonValue, err := lemonCursor.ReadBytes(ptrInt64(1024))
+		lemonValue, err := lemonCursor.ReadBytes(int64(1024))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -493,7 +493,7 @@ func TestReadDatabaseFromResources(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		todoValue, err := todoCursor.ReadBytes(ptrInt64(1024))
+		todoValue, err := todoCursor.ReadBytes(int64(1024))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -616,7 +616,7 @@ func TestMultithreading(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		fooValue, err := fooCursor.ReadBytes(ptrInt64(1024))
+		fooValue, err := fooCursor.ReadBytes(int64(1024))
 		if err != nil {
 			t.Error(err)
 			return
@@ -642,7 +642,7 @@ func TestMultithreading(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fooValue, err := fooCursor.ReadBytes(ptrInt64(1024))
+	fooValue, err := fooCursor.ReadBytes(int64(1024))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -654,7 +654,7 @@ func TestMultithreading(t *testing.T) {
 
 func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File) {
 	t.Helper()
-	maxRead := ptrInt64(1024)
+	maxRead := int64(1024)
 
 	// init the db
 	if err := core.SetLength(0); err != nil {
@@ -1981,7 +1981,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 }
 
 func TestCompaction(t *testing.T) {
-	maxRead := ptrInt64(1024)
+	maxRead := int64(1024)
 
 	// memory
 	{
@@ -2034,7 +2034,7 @@ func TestCompaction(t *testing.T) {
 	}
 }
 
-func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, isFile bool, maxRead *int64) {
+func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, isFile bool, maxRead int64) {
 	t.Helper()
 
 	// empty DB compaction
@@ -2811,10 +2811,6 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 }
 
 // helpers
-
-func ptrInt64(v int64) *int64 {
-	return &v
-}
 
 func assertEqual[T comparable](t *testing.T, expected, actual T) {
 	t.Helper()

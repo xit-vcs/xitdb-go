@@ -816,7 +816,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				t.Fatal(err)
 			}
 			assertEqual(t, int64(3), count)
-			barValue, err := barCursor.ReadBytes(ptrInt64(1024))
+			barValue, err := barCursor.ReadBytes(1024)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -844,7 +844,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 						t.Fatal("expected tag != TagNone")
 					}
 
-					value, err := cursor.ReadBytes(ptrInt64(1024))
+					value, err := cursor.ReadBytes(1024)
 					if err != nil {
 						return err
 					}
@@ -963,7 +963,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 						return err
 					}
 
-					value, err := cursor.ReadBytes(ptrInt64(1024))
+					value, err := cursor.ReadBytes(1024)
 					if err != nil {
 						return err
 					}
@@ -1020,7 +1020,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			value, err := valueCursor.ReadBytes(nil) // make sure nil max size works
+			value, err := valueCursor.ReadBytes(0) // make sure 0 (no limit) max size works
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1126,7 +1126,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			barValue, err := readBarCursor.ReadBytes(ptrInt64(1024))
+			barValue, err := readBarCursor.ReadBytes(1024)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1219,7 +1219,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				barBytesObj, err := readBarCursor.ReadBytesObject(ptrInt64(1024))
+				barBytesObj, err := readBarCursor.ReadBytesObject(1024)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -1278,7 +1278,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				barBytesObj, err := readBarCursor.ReadBytesObject(ptrInt64(1024))
+				barBytesObj, err := readBarCursor.ReadBytesObject(1024)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -1337,7 +1337,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				barBytesObj, err := readBarCursor.ReadBytesObject(ptrInt64(1024))
+				barBytesObj, err := readBarCursor.ReadBytesObject(1024)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -1366,7 +1366,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			barBufferValue, err := barCursor.ReadBytes(ptrInt64(1024))
+			barBufferValue, err := barCursor.ReadBytes(1024)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1423,7 +1423,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			barValue, err := barCursor.ReadBytes(ptrInt64(1024))
+			barValue, err := barCursor.ReadBytes(1024)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1437,7 +1437,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			bazValue, err := bazCursor.ReadBytes(ptrInt64(1024))
+			bazValue, err := bazCursor.ReadBytes(1024)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1514,7 +1514,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			helloValue, err := helloCursor.ReadBytes(ptrInt64(1024))
+			helloValue, err := helloCursor.ReadBytes(1024)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1528,7 +1528,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			barValue2, err := barCursor2.ReadBytes(ptrInt64(1024))
+			barValue2, err := barCursor2.ReadBytes(1024)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1561,7 +1561,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			goodbyeValue, err := goodbyeCursor.ReadBytes(ptrInt64(1024))
+			goodbyeValue, err := goodbyeCursor.ReadBytes(1024)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1575,7 +1575,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			helloValue2, err := helloCursor2.ReadBytes(ptrInt64(1024))
+			helloValue2, err := helloCursor2.ReadBytes(1024)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1960,7 +1960,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				appleValue, err := appleCursor.ReadBytes(ptrInt64(1024))
+				appleValue, err := appleCursor.ReadBytes(1024)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -1998,7 +1998,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				bananaValue, err := bananaCursor.ReadBytes(ptrInt64(1024))
+				bananaValue, err := bananaCursor.ReadBytes(1024)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -2072,7 +2072,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				pearValue, err := pearCursor.ReadBytes(ptrInt64(1024))
+				pearValue, err := pearCursor.ReadBytes(1024)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -2087,7 +2087,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				grapeValue, err := grapeCursor.ReadBytes(ptrInt64(1024))
+				grapeValue, err := grapeCursor.ReadBytes(1024)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -2140,7 +2140,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			value2, err := cursor.ReadBytes(ptrInt64(1024))
+			value2, err := cursor.ReadBytes(1024)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2217,7 +2217,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			value2, err := cursor.ReadBytes(ptrInt64(1024))
+			value2, err := cursor.ReadBytes(1024)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2279,7 +2279,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			value2, err := cursor.ReadBytes(ptrInt64(1024))
+			value2, err := cursor.ReadBytes(1024)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2307,7 +2307,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			value2, err := cursor.ReadBytes(ptrInt64(1024))
+			value2, err := cursor.ReadBytes(1024)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2356,7 +2356,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			value, err := cursor.ReadBytes(ptrInt64(1024))
+			value, err := cursor.ReadBytes(1024)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2393,7 +2393,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			value, err := cursor.ReadBytes(ptrInt64(1024))
+			value, err := cursor.ReadBytes(1024)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2409,7 +2409,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			value, err := cursor.ReadBytes(ptrInt64(1024))
+			value, err := cursor.ReadBytes(1024)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2462,7 +2462,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			value2, err := cursor.ReadBytes(ptrInt64(1024))
+			value2, err := cursor.ReadBytes(1024)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2483,7 +2483,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 					t.Fatal(err)
 				}
 				value := "wat" + strconv.Itoa(i)
-				value2, err := nextCursor.ReadBytes(ptrInt64(1024))
+				value2, err := nextCursor.ReadBytes(1024)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -2577,7 +2577,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			value2, err := cursor.ReadBytes(ptrInt64(1024))
+			value2, err := cursor.ReadBytes(1024)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2663,14 +2663,14 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 					t.Fatal(err)
 				}
 				if bytes.Equal(kvPair.Hash, fooKey) {
-					key, err := kvPair.KeyCursor.ReadBytes(ptrInt64(1024))
+					key, err := kvPair.KeyCursor.ReadBytes(1024)
 					if err != nil {
 						t.Fatal(err)
 					}
 					assertEqual(t, "foo", string(key))
 					assertEqual(t, int64(42), kvPair.ValueCursor.SlotPtr.Slot.Value)
 				} else {
-					value, err := kvPair.ValueCursor.ReadBytes(ptrInt64(1024))
+					value, err := kvPair.ValueCursor.ReadBytes(1024)
 					if err != nil {
 						t.Fatal(err)
 					}

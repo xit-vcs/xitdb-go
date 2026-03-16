@@ -174,8 +174,7 @@ fooCursor, err := moment.GetCursor("foo")
 if err != nil {
     log.Fatal(err)
 }
-maxRead := int64(1024)
-fooValue, err := fooCursor.ReadBytes(&maxRead)
+fooValue, err := fooCursor.ReadBytes(1024)
 if err != nil {
     log.Fatal(err)
 }
@@ -202,7 +201,7 @@ appleCursor, err := fruits.GetCursor(0)
 if err != nil {
     log.Fatal(err)
 }
-appleValue, err := appleCursor.ReadBytes(&maxRead)
+appleValue, err := appleCursor.ReadBytes(maxRead)
 if err != nil {
     log.Fatal(err)
 }
@@ -259,8 +258,7 @@ randomNumberCursor, err := moment.GetCursor("random-number")
 if err != nil {
     log.Fatal(err)
 }
-maxRead := int64(1024)
-randomNumber, err := randomNumberCursor.ReadBytesObject(&maxRead)
+randomNumber, err := randomNumberCursor.ReadBytesObject(1024)
 if err != nil {
     log.Fatal(err)
 }
@@ -668,15 +666,14 @@ for personCursor, err := range people.All() {
             log.Fatal(err)
         }
 
-        maxRead := int64(1024)
-        key, err := kvPair.KeyCursor.ReadBytes(&maxRead)
+        key, err := kvPair.KeyCursor.ReadBytes(1024)
         if err != nil {
             log.Fatal(err)
         }
 
         switch kvPair.ValueCursor.SlotPtr.Slot.Tag {
         case xitdb.TagShortBytes, xitdb.TagBytes:
-            val, err := kvPair.ValueCursor.ReadBytes(&maxRead)
+            val, err := kvPair.ValueCursor.ReadBytes(1024)
             if err != nil {
                 log.Fatal(err)
             }

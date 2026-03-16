@@ -69,7 +69,7 @@ func (c *ReadCursor) ReadFloat() (float64, error) {
 	return math.Float64frombits(binary.BigEndian.Uint64(buf[:])), nil
 }
 
-func (c *ReadCursor) ReadBytes(maxSize *int64) ([]byte, error) {
+func (c *ReadCursor) ReadBytes(maxSize int64) ([]byte, error) {
 	obj, err := c.ReadBytesObject(maxSize)
 	if err != nil {
 		return nil, err
@@ -77,7 +77,7 @@ func (c *ReadCursor) ReadBytes(maxSize *int64) ([]byte, error) {
 	return obj.Value, nil
 }
 
-func (c *ReadCursor) ReadBytesObject(maxSize *int64) (Bytes, error) {
+func (c *ReadCursor) ReadBytesObject(maxSize int64) (Bytes, error) {
 	switch c.SlotPtr.Slot.Tag {
 	case TagNone:
 		return Bytes{Value: []byte{}}, nil
@@ -89,7 +89,7 @@ func (c *ReadCursor) ReadBytesObject(maxSize *int64) (Bytes, error) {
 		if err != nil {
 			return Bytes{}, err
 		}
-		if maxSize != nil && valueSize > *maxSize {
+		if maxSize > 0 && valueSize > maxSize {
 			return Bytes{}, ErrStreamTooLong
 		}
 		startPosition, err := c.DB.Core.Position()
@@ -115,12 +115,12 @@ func (c *ReadCursor) ReadBytesObject(maxSize *int64) (Bytes, error) {
 		var buf [8]byte
 		binary.BigEndian.PutUint64(buf[:], uint64(c.SlotPtr.Slot.Value))
 
-		totalSize := 8
+		var totalSize int64 = 8
 		if c.SlotPtr.Slot.Full {
 			totalSize = 6
 		}
 
-		valueSize := 0
+		var valueSize int64
 		for _, b := range buf {
 			if b == 0 || valueSize == totalSize {
 				break
@@ -128,7 +128,7 @@ func (c *ReadCursor) ReadBytesObject(maxSize *int64) (Bytes, error) {
 			valueSize++
 		}
 
-		if maxSize != nil && int64(valueSize) > *maxSize {
+		if maxSize > 0 && valueSize > maxSize {
 			return Bytes{}, ErrStreamTooLong
 		}
 

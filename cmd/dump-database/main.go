@@ -20,7 +20,7 @@ func formatKey(cursor *xitdb.ReadCursor) (string, error) {
 	case xitdb.TagNone:
 		return "(none)", nil
 	case xitdb.TagBytes, xitdb.TagShortBytes:
-		b, err := cursor.ReadBytes(nil)
+		b, err := cursor.ReadBytes(0)
 		if err != nil {
 			return "", err
 		}
@@ -51,7 +51,7 @@ func formatKey(cursor *xitdb.ReadCursor) (string, error) {
 func getKeyValue(cursor *xitdb.ReadCursor) (any, error) {
 	switch cursor.SlotPtr.Slot.Tag {
 	case xitdb.TagBytes, xitdb.TagShortBytes:
-		b, err := cursor.ReadBytes(nil)
+		b, err := cursor.ReadBytes(0)
 		if err != nil {
 			return nil, err
 		}
@@ -169,7 +169,7 @@ func toJsonValue(cursor *xitdb.ReadCursor, isRoot bool) (any, error) {
 		return result, nil
 
 	case xitdb.TagBytes, xitdb.TagShortBytes:
-		bytesObj, err := cursor.ReadBytesObject(nil)
+		bytesObj, err := cursor.ReadBytesObject(0)
 		if err != nil {
 			return nil, err
 		}
@@ -299,7 +299,7 @@ func printValue(cursor *xitdb.ReadCursor, indent string) error {
 		}
 
 	case xitdb.TagBytes, xitdb.TagShortBytes:
-		bytesObj, err := cursor.ReadBytesObject(nil)
+		bytesObj, err := cursor.ReadBytesObject(0)
 		if err != nil {
 			return err
 		}
