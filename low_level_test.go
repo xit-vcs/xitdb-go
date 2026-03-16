@@ -87,16 +87,13 @@ func TestLowLevelMemoryOperations(t *testing.T) {
 	assertEqual(t, "goodbye, cruel world!", string(allBytes))
 }
 
-func lastSlotData(t *testing.T, cursor *WriteCursor) WriteableData {
+func lastSlotData(t *testing.T, cursor *WriteCursor) Slot {
 	t.Helper()
 	slot, err := cursor.ReadPathSlot([]PathPart{ArrayListGet{Index: -1}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if slot != nil {
-		return *slot
-	}
-	return nil
+	return slot
 }
 
 func testSlice(t *testing.T, core Core, hasher Hasher, originalSize int, sliceOffset int64, sliceSize int64) {
@@ -114,14 +111,10 @@ func testSlice(t *testing.T, core Core, hasher Hasher, originalSize int, sliceOf
 	if err != nil {
 		t.Fatal(err)
 	}
-	var slotData WriteableData
-	if lastSlot != nil {
-		slotData = *lastSlot
-	}
 	_, err = rootCursor.WritePath([]PathPart{
 		ArrayListInit{},
 		ArrayListAppend{},
-		WriteDataPart{Data: slotData},
+		WriteDataPart{Data: lastSlot},
 		HashMapInitPart{},
 		ContextPart{Function: func(cursor *WriteCursor) error {
 			values := make([]int64, 0)
@@ -284,14 +277,10 @@ func testConcat(t *testing.T, core Core, hasher Hasher, listASize int64, listBSi
 	if err != nil {
 		t.Fatal(err)
 	}
-	var slotData WriteableData
-	if lastSlot != nil {
-		slotData = *lastSlot
-	}
 	_, err = rootCursor.WritePath([]PathPart{
 		ArrayListInit{},
 		ArrayListAppend{},
-		WriteDataPart{Data: slotData},
+		WriteDataPart{Data: lastSlot},
 		HashMapInitPart{},
 		ContextPart{Function: func(cursor *WriteCursor) error {
 			// create even list
@@ -349,14 +338,10 @@ func testConcat(t *testing.T, core Core, hasher Hasher, listASize int64, listBSi
 	if err != nil {
 		t.Fatal(err)
 	}
-	var slotData2 WriteableData
-	if lastSlot2 != nil {
-		slotData2 = *lastSlot2
-	}
 	_, err = rootCursor.WritePath([]PathPart{
 		ArrayListInit{},
 		ArrayListAppend{},
-		WriteDataPart{Data: slotData2},
+		WriteDataPart{Data: lastSlot2},
 		HashMapInitPart{},
 		ContextPart{Function: func(cursor *WriteCursor) error {
 			// get the even list
@@ -467,14 +452,10 @@ func testInsertAndRemove(t *testing.T, core Core, hasher Hasher, originalSize in
 	if err != nil {
 		t.Fatal(err)
 	}
-	var slotData WriteableData
-	if lastSlot != nil {
-		slotData = *lastSlot
-	}
 	_, err = rootCursor.WritePath([]PathPart{
 		ArrayListInit{},
 		ArrayListAppend{},
-		WriteDataPart{Data: slotData},
+		WriteDataPart{Data: lastSlot},
 		HashMapInitPart{},
 		ContextPart{Function: func(cursor *WriteCursor) error {
 			values := make([]int64, 0)
@@ -580,14 +561,10 @@ func testInsertAndRemove(t *testing.T, core Core, hasher Hasher, originalSize in
 	if err != nil {
 		t.Fatal(err)
 	}
-	var slotData2 WriteableData
-	if lastSlot2 != nil {
-		slotData2 = *lastSlot2
-	}
 	_, err = rootCursor.WritePath([]PathPart{
 		ArrayListInit{},
 		ArrayListAppend{},
-		WriteDataPart{Data: slotData2},
+		WriteDataPart{Data: lastSlot2},
 		HashMapInitPart{},
 		ContextPart{Function: func(cursor *WriteCursor) error {
 			values := make([]int64, 0)
@@ -778,14 +755,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var slotData WriteableData
-		if lastSlot != nil {
-			slotData = *lastSlot
-		}
 		_, err = rootCursor.WritePath([]PathPart{
 			ArrayListInit{},
 			ArrayListAppend{},
-			WriteDataPart{Data: slotData},
+			WriteDataPart{Data: lastSlot},
 			HashMapInitPart{},
 			HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
 			ContextPart{Function: func(cursor *WriteCursor) error {
@@ -829,14 +802,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var slotData WriteableData
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
 				ContextPart{Function: func(cursor *WriteCursor) error {
@@ -931,14 +900,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var slotData WriteableData
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
 				ContextPart{Function: func(cursor *WriteCursor) error {
@@ -987,14 +952,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var slotData WriteableData
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			_, writeErr := rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
 				ContextPart{Function: func(cursor *WriteCursor) error {
@@ -1041,14 +1002,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var slotData WriteableData
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			barCursor, err := rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
 			})
@@ -1068,14 +1025,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				var slotData WriteableData
-				if lastSlot != nil {
-					slotData = *lastSlot
-				}
 				nextBarCursor, err := rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: slotData},
+					WriteDataPart{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
 				})
@@ -1094,14 +1047,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				var slotData WriteableData
-				if lastSlot != nil {
-					slotData = *lastSlot
-				}
 				nextBarCursor, err := rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: slotData},
+					WriteDataPart{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
 				})
@@ -1139,14 +1088,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var slotData WriteableData
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			barCursor, err := rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
 			})
@@ -1185,14 +1130,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				var slotData WriteableData
-				if lastSlot != nil {
-					slotData = *lastSlot
-				}
 				barCursor, err := rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: slotData},
+					WriteDataPart{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
 				})
@@ -1244,14 +1185,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				var slotData WriteableData
-				if lastSlot != nil {
-					slotData = *lastSlot
-				}
 				barCursor, err := rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: slotData},
+					WriteDataPart{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
 				})
@@ -1303,14 +1240,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				var slotData WriteableData
-				if lastSlot != nil {
-					slotData = *lastSlot
-				}
 				barCursor, err := rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: slotData},
+					WriteDataPart{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
 				})
@@ -1379,14 +1312,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var slotData WriteableData
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			barSlotCursor, err := rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
 				WriteDataPart{Data: NewString("bar")},
@@ -1401,14 +1330,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			slotData = nil
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
 				WriteDataPart{Data: barSlot},
@@ -1464,14 +1389,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			slotData = nil
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: smallConflictKey}},
 				WriteDataPart{Data: NewString("small")},
@@ -1490,14 +1411,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			slotData = nil
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: conflictKey}},
 				WriteDataPart{Data: NewString("hello")},
@@ -1539,14 +1456,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			slotData = nil
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: conflictKey}},
 				WriteDataPart{Data: NewString("goodbye")},
@@ -1615,14 +1528,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				slotData = nil
-				if lastSlot != nil {
-					slotData = *lastSlot
-				}
 				_, err = rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: slotData},
+					WriteDataPart{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapRemovePart{Hash: smallConflictKey},
 				})
@@ -1698,14 +1607,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				slotData = nil
-				if lastSlot != nil {
-					slotData = *lastSlot
-				}
 				_, err = rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: slotData},
+					WriteDataPart{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapRemovePart{Hash: conflictKey},
 				})
@@ -1769,14 +1674,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				slotData = nil
-				if lastSlot != nil {
-					slotData = *lastSlot
-				}
 				_, err = rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: slotData},
+					WriteDataPart{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
 					WriteDataPart{Data: NewUint(42)},
@@ -1806,14 +1707,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				slotData = nil
-				if lastSlot != nil {
-					slotData = *lastSlot
-				}
 				_, err = rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: slotData},
+					WriteDataPart{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
 					WriteDataPart{Data: NewInt(-42)},
@@ -1843,14 +1740,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				slotData = nil
-				if lastSlot != nil {
-					slotData = *lastSlot
-				}
 				_, err = rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: slotData},
+					WriteDataPart{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
 					WriteDataPart{Data: NewFloat(42.5)},
@@ -1879,14 +1772,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			slotData = nil
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapRemovePart{Hash: fooKey},
 			})
@@ -1899,14 +1788,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			slotData = nil
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			_, removeErr := rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapRemovePart{Hash: db.digest([]byte("doesn't exist"))},
 			})
@@ -1933,14 +1818,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				slotData = nil
-				if lastSlot != nil {
-					slotData = *lastSlot
-				}
 				_, err = rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: slotData},
+					WriteDataPart{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("fruits"))}},
 					ArrayListInit{},
@@ -1971,14 +1852,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				slotData = nil
-				if lastSlot != nil {
-					slotData = *lastSlot
-				}
 				_, err = rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: slotData},
+					WriteDataPart{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("fruits"))}},
 					ArrayListInit{},
@@ -2022,14 +1899,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				slotData = nil
-				if lastSlot != nil {
-					slotData = *lastSlot
-				}
 				_, err = rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: slotData},
+					WriteDataPart{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("fruits"))}},
 					ArrayListInit{},
@@ -2045,14 +1918,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				slotData = nil
-				if lastSlot != nil {
-					slotData = *lastSlot
-				}
 				_, err = rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: slotData},
+					WriteDataPart{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("fruits"))}},
 					ArrayListInit{},
@@ -2114,14 +1983,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var slotData WriteableData
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: watKey}},
 				WriteDataPart{Data: NewString(value)},
@@ -2156,14 +2021,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var slotData WriteableData
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			_, writeErr := rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: watKey}},
 				WriteDataPart{Data: NewString(value)},
@@ -2182,14 +2043,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var slotData WriteableData
-		if lastSlot != nil {
-			slotData = *lastSlot
-		}
 		_, err = rootCursor.WritePath([]PathPart{
 			ArrayListInit{},
 			ArrayListAppend{},
-			WriteDataPart{Data: slotData},
+			WriteDataPart{Data: lastSlot},
 			HashMapInitPart{},
 			HashMapGetPart{Target: HashMapGetValue{Hash: watKey}},
 			WriteDataPart{Data: NewString("wat32")},
@@ -2253,14 +2110,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var slotData WriteableData
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 				ArrayListInit{},
 				ArrayListAppend{},
 				WriteDataPart{Data: NewString(value)},
@@ -2331,14 +2184,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var slotData WriteableData
-		if lastSlot != nil {
-			slotData = *lastSlot
-		}
 		_, err = rootCursor.WritePath([]PathPart{
 			ArrayListInit{},
 			ArrayListAppend{},
-			WriteDataPart{Data: slotData},
+			WriteDataPart{Data: lastSlot},
 			ArrayListInit{},
 			ArrayListGet{Index: -1},
 			WriteDataPart{Data: NewString("hello")},
@@ -2368,14 +2217,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		slotData = nil
-		if lastSlot != nil {
-			slotData = *lastSlot
-		}
 		_, err = rootCursor.WritePath([]PathPart{
 			ArrayListInit{},
 			ArrayListAppend{},
-			WriteDataPart{Data: slotData},
+			WriteDataPart{Data: lastSlot},
 			ArrayListInit{},
 			ArrayListGet{Index: -1},
 			WriteDataPart{Data: NewString("goodbye")},
@@ -2439,14 +2284,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var slotData WriteableData
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 				ArrayListInit{},
 				ArrayListAppend{},
 				WriteDataPart{Data: NewString(value)},
@@ -2554,14 +2395,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var slotData WriteableData
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: watKey}},
 				WriteDataPart{Data: NewString(value)},
@@ -2590,14 +2427,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var slotData WriteableData
-		if lastSlot != nil {
-			slotData = *lastSlot
-		}
 		_, err = rootCursor.WritePath([]PathPart{
 			ArrayListInit{},
 			ArrayListAppend{},
-			WriteDataPart{Data: slotData},
+			WriteDataPart{Data: lastSlot},
 			HashMapInitPart{},
 			HashMapGetPart{Target: HashMapGetKey{Hash: fooKey}},
 			WriteDataPart{Data: NewString("foo")},
@@ -2609,14 +2442,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		slotData = nil
-		if lastSlot != nil {
-			slotData = *lastSlot
-		}
 		_, err = rootCursor.WritePath([]PathPart{
 			ArrayListInit{},
 			ArrayListAppend{},
-			WriteDataPart{Data: slotData},
+			WriteDataPart{Data: lastSlot},
 			HashMapInitPart{},
 			HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
 			WriteDataPart{Data: NewUint(42)},
@@ -2630,14 +2459,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		slotData = nil
-		if lastSlot != nil {
-			slotData = *lastSlot
-		}
 		_, err = rootCursor.WritePath([]PathPart{
 			ArrayListInit{},
 			ArrayListAppend{},
-			WriteDataPart{Data: slotData},
+			WriteDataPart{Data: lastSlot},
 			HashMapInitPart{},
 			HashMapRemovePart{Hash: db.digest([]byte("wat0"))},
 		})
@@ -2689,14 +2514,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			slotData = nil
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			innerCursor, err := rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -2761,14 +2582,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var slotData WriteableData
-		if lastSlot != nil {
-			slotData = *lastSlot
-		}
 		_, err = rootCursor.WritePath([]PathPart{
 			ArrayListInit{},
 			ArrayListAppend{},
-			WriteDataPart{Data: slotData},
+			WriteDataPart{Data: lastSlot},
 			HashMapInitPart{},
 			ContextPart{Function: func(cursor *WriteCursor) error {
 				values := make([]int64, 0)
@@ -2904,14 +2721,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var slotData WriteableData
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 				LinkedArrayListInit{},
 				LinkedArrayListAppend{},
 			})
@@ -2926,14 +2739,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var slotData WriteableData
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 				LinkedArrayListInit{},
 				LinkedArrayListAppend{},
 				WriteDataPart{Data: nil},
@@ -2959,14 +2768,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var slotData WriteableData
-		if lastSlot != nil {
-			slotData = *lastSlot
-		}
 		_, err = rootCursor.WritePath([]PathPart{
 			ArrayListInit{},
 			ArrayListAppend{},
-			WriteDataPart{Data: slotData},
+			WriteDataPart{Data: lastSlot},
 			LinkedArrayListInit{},
 			LinkedArrayListAppend{},
 			WriteDataPart{Data: NewUint(42)},
@@ -2980,14 +2785,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var slotData WriteableData
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 				LinkedArrayListInit{},
 				LinkedArrayListInsertPart{Index: 0},
 				WriteDataPart{Data: NewUint(uint64(i))},
@@ -3013,14 +2814,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var slotData WriteableData
-		if lastSlot != nil {
-			slotData = *lastSlot
-		}
 		_, err = rootCursor.WritePath([]PathPart{
 			ArrayListInit{},
 			ArrayListAppend{},
-			WriteDataPart{Data: slotData},
+			WriteDataPart{Data: lastSlot},
 			LinkedArrayListInit{},
 			LinkedArrayListAppend{},
 			WriteDataPart{Data: NewUint(42)},
@@ -3034,14 +2831,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var slotData WriteableData
-			if lastSlot != nil {
-				slotData = *lastSlot
-			}
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: slotData},
+				WriteDataPart{Data: lastSlot},
 				LinkedArrayListInit{},
 				LinkedArrayListInsertPart{Index: int64(i)},
 				WriteDataPart{Data: NewUint(uint64(i))},

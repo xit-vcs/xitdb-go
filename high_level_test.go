@@ -676,12 +676,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		if err != nil {
 			t.Fatal(err)
 		}
-		var slotData WriteableData
-		if lastSlot != nil {
-			slotData = *lastSlot
-		}
-
-		err = history.AppendContext(slotData, func(cursor *WriteCursor) error {
+		err = history.AppendContext(lastSlot, func(cursor *WriteCursor) error {
 			moment, err := NewWriteHashMap(cursor)
 			if err != nil {
 				return err
@@ -1185,12 +1180,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		if err != nil {
 			t.Fatal(err)
 		}
-		var slotData WriteableData
-		if lastSlot != nil {
-			slotData = *lastSlot
-		}
-
-		err = history.AppendContext(slotData, func(cursor *WriteCursor) error {
+		err = history.AppendContext(lastSlot, func(cursor *WriteCursor) error {
 			moment, err := NewWriteHashMap(cursor)
 			if err != nil {
 				return err
@@ -1675,12 +1665,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		if err != nil {
 			t.Fatal(err)
 		}
-		var slotData WriteableData
-		if lastSlot != nil {
-			slotData = *lastSlot
-		}
-
-		err = history.AppendContext(slotData, func(cursor *WriteCursor) error {
+		err = history.AppendContext(lastSlot, func(cursor *WriteCursor) error {
 			moment, err := NewWriteHashMap(cursor)
 			if err != nil {
 				return err
@@ -1777,12 +1762,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		if err != nil {
 			t.Fatal(err)
 		}
-		var slotData WriteableData
-		if lastSlot != nil {
-			slotData = *lastSlot
-		}
-
-		err = history.AppendContext(slotData, func(cursor *WriteCursor) error {
+		err = history.AppendContext(lastSlot, func(cursor *WriteCursor) error {
 			moment, err := NewWriteHashMap(cursor)
 			if err != nil {
 				return err
@@ -1870,7 +1850,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := history.Append(*histSlot); err != nil {
+		if err := history.Append(histSlot); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1886,12 +1866,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		if err != nil {
 			t.Fatal(err)
 		}
-		var slotData WriteableData
-		if lastSlot != nil {
-			slotData = *lastSlot
-		}
-
-		err = history.AppendContext(slotData, func(cursor *WriteCursor) error {
+		err = history.AppendContext(lastSlot, func(cursor *WriteCursor) error {
 			moment, err := NewWriteHashMap(cursor)
 			if err != nil {
 				return err
@@ -2071,11 +2046,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			if err != nil {
 				t.Fatal(err)
 			}
-			var sd WriteableData
-			if lastSlot != nil {
-				sd = *lastSlot
-			}
-			err = history.AppendContext(sd, func(cursor *WriteCursor) error {
+			err = history.AppendContext(lastSlot, func(cursor *WriteCursor) error {
 				moment, err := NewWriteHashMap(cursor)
 				if err != nil {
 					return err
@@ -2103,11 +2074,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			if err != nil {
 				t.Fatal(err)
 			}
-			var sd WriteableData
-			if lastSlot != nil {
-				sd = *lastSlot
-			}
-			err = history.AppendContext(sd, func(cursor *WriteCursor) error {
+			err = history.AppendContext(lastSlot, func(cursor *WriteCursor) error {
 				moment, err := NewWriteHashMap(cursor)
 				if err != nil {
 					return err
@@ -2235,11 +2202,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			if err != nil {
 				t.Fatal(err)
 			}
-			var sd WriteableData
-			if lastSlot != nil {
-				sd = *lastSlot
-			}
-			err = history.AppendContext(sd, func(cursor *WriteCursor) error {
+			err = history.AppendContext(lastSlot, func(cursor *WriteCursor) error {
 				moment, err := NewWriteHashMap(cursor)
 				if err != nil {
 					return err
@@ -2506,11 +2469,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			if err != nil {
 				t.Fatal(err)
 			}
-			var sd WriteableData
-			if lastSlot != nil {
-				sd = *lastSlot
-			}
-			err = history.AppendContext(sd, func(cursor *WriteCursor) error {
+			err = history.AppendContext(lastSlot, func(cursor *WriteCursor) error {
 				moment, err := NewWriteHashMap(cursor)
 				if err != nil {
 					return err
@@ -2538,12 +2497,8 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			if err != nil {
 				t.Fatal(err)
 			}
-			var sd WriteableData
-			if lastSlot != nil {
-				sd = *lastSlot
-			}
 			r := round
-			err = history.AppendContext(sd, func(cursor *WriteCursor) error {
+			err = history.AppendContext(lastSlot, func(cursor *WriteCursor) error {
 				moment, err := NewWriteHashMap(cursor)
 				if err != nil {
 					return err
@@ -2622,11 +2577,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			if err != nil {
 				t.Fatal(err)
 			}
-			var sd WriteableData
-			if lastSlot != nil {
-				sd = *lastSlot
-			}
-			err = history.AppendContext(sd, func(cursor *WriteCursor) error {
+			err = history.AppendContext(lastSlot, func(cursor *WriteCursor) error {
 				moment, err := NewWriteHashMap(cursor)
 				if err != nil {
 					return err
@@ -2705,11 +2656,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			if err != nil {
 				t.Fatal(err)
 			}
-			var sd WriteableData
-			if lastSlot != nil {
-				sd = *lastSlot
-			}
-			err = history.AppendContext(sd, func(cursor *WriteCursor) error {
+			err = history.AppendContext(lastSlot, func(cursor *WriteCursor) error {
 				moment, err := NewWriteHashMap(cursor)
 				if err != nil {
 					return err
@@ -2735,11 +2682,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				if err != nil {
 					t.Fatal(err)
 				}
-				var csd WriteableData
-				if cLastSlot != nil {
-					csd = *cLastSlot
-				}
-				err = cHistory.AppendContext(csd, func(cursor *WriteCursor) error {
+				err = cHistory.AppendContext(cLastSlot, func(cursor *WriteCursor) error {
 					moment, err := NewWriteHashMap(cursor)
 					if err != nil {
 						return err

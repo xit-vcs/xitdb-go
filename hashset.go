@@ -30,7 +30,7 @@ func (s *ReadHashSet) GetCursor(key string) (*ReadCursor, error) {
 	return s.GetCursorByHash(hash)
 }
 
-func (s *ReadHashSet) GetSlot(key string) (*Slot, error) {
+func (s *ReadHashSet) GetSlot(key string) (Slot, error) {
 	hash := s.Cursor.DB.digest([]byte(key))
 	return s.GetSlotByHash(hash)
 }
@@ -40,7 +40,7 @@ func (s *ReadHashSet) GetCursorByBytes(key Bytes) (*ReadCursor, error) {
 	return s.GetCursorByHash(hash)
 }
 
-func (s *ReadHashSet) GetSlotByBytes(key Bytes) (*Slot, error) {
+func (s *ReadHashSet) GetSlotByBytes(key Bytes) (Slot, error) {
 	hash := s.Cursor.DB.digest(key.Value)
 	return s.GetSlotByHash(hash)
 }
@@ -49,7 +49,7 @@ func (s *ReadHashSet) GetCursorByHash(hash []byte) (*ReadCursor, error) {
 	return s.Cursor.ReadPath([]PathPart{HashMapGetPart{Target: HashMapGetKey{Hash: hash}}})
 }
 
-func (s *ReadHashSet) GetSlotByHash(hash []byte) (*Slot, error) {
+func (s *ReadHashSet) GetSlotByHash(hash []byte) (Slot, error) {
 	return s.Cursor.ReadPathSlot([]PathPart{HashMapGetPart{Target: HashMapGetKey{Hash: hash}}})
 }
 

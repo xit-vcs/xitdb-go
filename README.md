@@ -76,12 +76,7 @@ lastSlot, err := history.GetSlot(-1)
 if err != nil {
     log.Fatal(err)
 }
-var slotData xitdb.WriteableData
-if lastSlot != nil {
-    slotData = *lastSlot
-}
-
-err = history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
+err = history.AppendContext(lastSlot, func(cursor *xitdb.WriteCursor) error {
     moment, err := xitdb.NewWriteHashMap(cursor)
     if err != nil {
         return err
@@ -277,12 +272,8 @@ lastSlot, err := history.GetSlot(-1)
 if err != nil {
     log.Fatal(err)
 }
-var slotData xitdb.WriteableData
-if lastSlot != nil {
-    slotData = *lastSlot
-}
 
-err = history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
+err = history.AppendContext(lastSlot, func(cursor *xitdb.WriteCursor) error {
     moment, err := xitdb.NewWriteHashMap(cursor)
     if err != nil {
         return err
@@ -382,12 +373,8 @@ lastSlot, err := history.GetSlot(-1)
 if err != nil {
     log.Fatal(err)
 }
-var slotData xitdb.WriteableData
-if lastSlot != nil {
-    slotData = *lastSlot
-}
 
-err = history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
+err = history.AppendContext(lastSlot, func(cursor *xitdb.WriteCursor) error {
     moment, err := xitdb.NewWriteHashMap(cursor)
     if err != nil {
         return err
@@ -482,7 +469,7 @@ historySlot, err := history.GetSlot(historyIndex)
 if err != nil {
     log.Fatal(err)
 }
-if err := history.Append(*historySlot); err != nil {
+if err := history.Append(historySlot); err != nil {
     log.Fatal(err)
 }
 ```
@@ -494,12 +481,8 @@ lastSlot, err := history.GetSlot(-1)
 if err != nil {
     log.Fatal(err)
 }
-var slotData xitdb.WriteableData
-if lastSlot != nil {
-    slotData = *lastSlot
-}
 
-err = history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
+err = history.AppendContext(lastSlot, func(cursor *xitdb.WriteCursor) error {
     moment, err := xitdb.NewWriteHashMap(cursor)
     if err != nil {
         return err

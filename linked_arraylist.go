@@ -29,7 +29,7 @@ func (a *ReadLinkedArrayList) GetCursor(index int64) (*ReadCursor, error) {
 	return a.cursor.ReadPath([]PathPart{LinkedArrayListGet{Index: index}})
 }
 
-func (a *ReadLinkedArrayList) GetSlot(index int64) (*Slot, error) {
+func (a *ReadLinkedArrayList) GetSlot(index int64) (Slot, error) {
 	return a.cursor.ReadPathSlot([]PathPart{LinkedArrayListGet{Index: index}})
 }
 

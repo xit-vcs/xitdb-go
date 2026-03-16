@@ -28,19 +28,15 @@ func (c *ReadCursor) ReadPath(path []PathPart) (*ReadCursor, error) {
 	return &ReadCursor{SlotPtr: slotPtr, DB: c.DB}, nil
 }
 
-func (c *ReadCursor) ReadPathSlot(path []PathPart) (*Slot, error) {
+func (c *ReadCursor) ReadPathSlot(path []PathPart) (Slot, error) {
 	slotPtr, err := c.DB.readSlotPointer(ReadOnly, path, 0, c.SlotPtr)
 	if err != nil {
 		if errors.Is(err, ErrKeyNotFound) {
-			return nil, nil
+			return Slot{}, nil
 		}
-		return nil, err
+		return Slot{}, err
 	}
-	if !slotPtr.Slot.Empty() {
-		s := slotPtr.Slot
-		return &s, nil
-	}
-	return nil, nil
+	return slotPtr.Slot, nil
 }
 
 func (c *ReadCursor) ReadUint() (uint64, error) {

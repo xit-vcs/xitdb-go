@@ -32,7 +32,7 @@ func (m *ReadHashMap) GetCursor(key string) (*ReadCursor, error) {
 	return m.GetCursorByHash(hash)
 }
 
-func (m *ReadHashMap) GetSlot(key string) (*Slot, error) {
+func (m *ReadHashMap) GetSlot(key string) (Slot, error) {
 	hash := m.Cursor.DB.digest([]byte(key))
 	return m.GetSlotByHash(hash)
 }
@@ -42,7 +42,7 @@ func (m *ReadHashMap) GetKeyCursor(key string) (*ReadCursor, error) {
 	return m.GetKeyCursorByHash(hash)
 }
 
-func (m *ReadHashMap) GetKeySlot(key string) (*Slot, error) {
+func (m *ReadHashMap) GetKeySlot(key string) (Slot, error) {
 	hash := m.Cursor.DB.digest([]byte(key))
 	return m.GetKeySlotByHash(hash)
 }
@@ -59,7 +59,7 @@ func (m *ReadHashMap) GetCursorByBytes(key Bytes) (*ReadCursor, error) {
 	return m.GetCursorByHash(hash)
 }
 
-func (m *ReadHashMap) GetSlotByBytes(key Bytes) (*Slot, error) {
+func (m *ReadHashMap) GetSlotByBytes(key Bytes) (Slot, error) {
 	hash := m.Cursor.DB.digest(key.Value)
 	return m.GetSlotByHash(hash)
 }
@@ -69,7 +69,7 @@ func (m *ReadHashMap) GetKeyCursorByBytes(key Bytes) (*ReadCursor, error) {
 	return m.GetKeyCursorByHash(hash)
 }
 
-func (m *ReadHashMap) GetKeySlotByBytes(key Bytes) (*Slot, error) {
+func (m *ReadHashMap) GetKeySlotByBytes(key Bytes) (Slot, error) {
 	hash := m.Cursor.DB.digest(key.Value)
 	return m.GetKeySlotByHash(hash)
 }
@@ -85,7 +85,7 @@ func (m *ReadHashMap) GetCursorByHash(hash []byte) (*ReadCursor, error) {
 	return m.Cursor.ReadPath([]PathPart{HashMapGetPart{Target: HashMapGetValue{Hash: hash}}})
 }
 
-func (m *ReadHashMap) GetSlotByHash(hash []byte) (*Slot, error) {
+func (m *ReadHashMap) GetSlotByHash(hash []byte) (Slot, error) {
 	return m.Cursor.ReadPathSlot([]PathPart{HashMapGetPart{Target: HashMapGetValue{Hash: hash}}})
 }
 
@@ -93,7 +93,7 @@ func (m *ReadHashMap) GetKeyCursorByHash(hash []byte) (*ReadCursor, error) {
 	return m.Cursor.ReadPath([]PathPart{HashMapGetPart{Target: HashMapGetKey{Hash: hash}}})
 }
 
-func (m *ReadHashMap) GetKeySlotByHash(hash []byte) (*Slot, error) {
+func (m *ReadHashMap) GetKeySlotByHash(hash []byte) (Slot, error) {
 	return m.Cursor.ReadPathSlot([]PathPart{HashMapGetPart{Target: HashMapGetKey{Hash: hash}}})
 }
 
