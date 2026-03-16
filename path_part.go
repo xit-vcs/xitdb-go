@@ -1087,7 +1087,7 @@ func (p WriteDataPart) readSlotPointer(db *Database, isTopLevel bool, writeMode 
 			if err != nil {
 				return SlotPointer{}, err
 			}
-			cursorWriter.formatTag = data.FormatTag
+			cursorWriter.FormatTag = data.FormatTag
 			if _, err := cursorWriter.Write(data.Value); err != nil {
 				return SlotPointer{}, err
 			}

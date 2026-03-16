@@ -65,7 +65,7 @@ type CursorWriter struct {
 	slot             Slot
 	startPosition    int64
 	relativePosition int64
-	formatTag        []byte
+	FormatTag        []byte
 }
 
 func (c *WriteCursor) Writer() (*CursorWriter, error) {
@@ -110,7 +110,7 @@ func (w *CursorWriter) Write(p []byte) (int, error) {
 }
 
 func (w *CursorWriter) Finish() error {
-	if w.formatTag != nil {
+	if w.FormatTag != nil {
 		w.slot = w.slot.WithFull(true)
 		formatTagPos, err := w.parent.DB.Core.Length()
 		if err != nil {
@@ -122,7 +122,7 @@ func (w *CursorWriter) Finish() error {
 		if w.startPosition+w.size != formatTagPos {
 			return ErrUnexpectedWriterPosition
 		}
-		if err := w.parent.DB.Core.Write(w.formatTag); err != nil {
+		if err := w.parent.DB.Core.Write(w.FormatTag); err != nil {
 			return err
 		}
 	}

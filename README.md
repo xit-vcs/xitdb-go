@@ -596,7 +596,7 @@ if err := cursorWriter.Finish(); err != nil {
 }
 ```
 
-If you need to set a format tag for the byte array, set the `formatTag` field on the writer before you call `Finish`.
+If you need to set a format tag for the byte array, set the `FormatTag` field on the writer before you call `Finish`.
 
 To read a byte array incrementally, get a reader from a cursor:
 
