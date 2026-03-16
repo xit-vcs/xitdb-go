@@ -14,7 +14,7 @@
 * Supports storing in a single file as well as purely in-memory use.
 * Runs as a library (embedded in process).
 * Incrementally reads and writes, so file-based databases can contain larger-than-memory datasets.
-* Reads never block writes, and a database can be read from multiple goroutines/processes without locks.
+* Reads never block writes, and a database can be read from multiple threads/processes without locks.
 * No query engine of any kind. You just write data structures (primarily an `ArrayList` and `HashMap`) that can be nested arbitrarily.
 * No dependencies besides the Go standard library (requires Go 1.23+).
 
@@ -819,4 +819,4 @@ This compacted database will be in a separate file. If you want to delete the or
 
 ## Thread Safety
 
-It is possible to read the database from multiple threads/goroutines without locks, even while writes are happening. This is a big benefit of immutable databases. However, each thread needs to use its own `Database` instance. See [the multithreading test](https://github.com/xit-vcs/xitdb-go/blob/e898ba337848c0e46fe987f73a3f67aa9f8bd0d9/high_level_test.go#L568) for an example of this. Also, keep in mind that writes still need to come from one thread at a time.
+It is possible to read the database from multiple threads/goroutines without locks, even while writes are happening. This is a big benefit of immutable databases. However, each thread needs to use its own `Database` instance. See [the multithreading test](https://github.com/xit-vcs/xitdb-go/blob/22c320fd08cd482ebf9fcfcb45e4bafb19e2a84e/high_level_test.go#L555) for an example of this. Also, keep in mind that writes still need to come from one thread at a time.
