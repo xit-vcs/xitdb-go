@@ -2045,7 +2045,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 		if err != nil {
 			t.Fatal(err)
 		}
-		compacted, err := source.Compact(targetCore, hasher)
+		compacted, err := source.Compact(targetCore)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2256,7 +2256,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			t.Fatal(err)
 		}
 
-		compacted, err := source.Compact(targetCore, hasher)
+		compacted, err := source.Compact(targetCore)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2555,7 +2555,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			}
 		}
 
-		compacted, err := source.Compact(targetCore, hasher)
+		compacted, err := source.Compact(targetCore)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2640,7 +2640,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				t.Fatal(err)
 			}
 
-			source.Compact(targetCore, hasher)
+			source.Compact(targetCore)
 
 			if err := targetCore.SeekTo(0); err != nil {
 				t.Fatal(err)
@@ -2720,7 +2720,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				t.Fatal(err)
 			}
 
-			compacted, err := source.Compact(targetCore, hasher)
+			compacted, err := source.Compact(targetCore)
 			if err != nil {
 				t.Fatal(err)
 			}

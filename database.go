@@ -417,8 +417,9 @@ func (db *Database) Freeze() error {
 	return ErrExpectedTxStart
 }
 
-func (db *Database) Compact(targetCore Core, hasher Hasher) (*Database, error) {
+func (db *Database) Compact(targetCore Core) (*Database, error) {
 	offsetMap := make(map[int64]int64)
+	hasher := Hasher{Hash: db.hash, ID: db.Header.HashID}
 	target, err := NewDatabase(targetCore, hasher)
 	if err != nil {
 		return nil, fmt.Errorf("init target: %w", err)

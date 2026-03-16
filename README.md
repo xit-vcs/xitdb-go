@@ -815,7 +815,7 @@ if err != nil {
 defer compactFile.Close()
 
 compactCore := xitdb.NewCoreBufferedFile(compactFile)
-compactDb, err := db.Compact(compactCore, hasher)
+compactDb, err := db.Compact(compactCore)
 if err != nil {
     log.Fatal(err)
 }
