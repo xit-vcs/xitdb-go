@@ -1055,7 +1055,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := barCursor.WriteValue(NewString("longstring")); err != nil {
+			if err := barCursor.Write(NewString("longstring")); err != nil {
 				t.Fatal(err)
 			}
 
@@ -1108,7 +1108,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := nextBarCursor.WriteValue(NewString("longstring")); err != nil {
+				if err := nextBarCursor.Write(NewString("longstring")); err != nil {
 					t.Fatal(err)
 				}
 				if barCursor.Slot().Value == nextBarCursor.Slot().Value {
@@ -1153,7 +1153,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := barCursor.WriteValue(NewString("shortstr")); err != nil {
+			if err := barCursor.Write(NewString("shortstr")); err != nil {
 				t.Fatal(err)
 			}
 
@@ -1199,7 +1199,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := barCursor.WriteValue(NewTaggedString("shortstr", "st")); err != nil {
+				if err := barCursor.Write(NewTaggedString("shortstr", "st")); err != nil {
 					t.Fatal(err)
 				}
 
@@ -1258,7 +1258,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := barCursor.WriteValue(NewTaggedString("shorts", "st")); err != nil {
+				if err := barCursor.Write(NewTaggedString("shorts", "st")); err != nil {
 					t.Fatal(err)
 				}
 
@@ -1317,7 +1317,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := barCursor.WriteValue(NewTaggedString("short", "st")); err != nil {
+				if err := barCursor.Write(NewTaggedString("short", "st")); err != nil {
 					t.Fatal(err)
 				}
 
@@ -2711,7 +2711,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 					t.Fatal(err)
 				}
 				if bytes.Equal(kvPair.Hash, fooKey) {
-					if err := kvPair.KeyCursor.WriteValue(NewString("bar")); err != nil {
+					if err := kvPair.KeyCursor.Write(NewString("bar")); err != nil {
 						t.Fatal(err)
 					}
 				}

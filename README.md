@@ -305,7 +305,7 @@ err = history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
     if err != nil {
         return err
     }
-    foodCursor.WriteValue(fruits.Slot())
+    foodCursor.Write(fruits.Slot())
 
     food, err := xitdb.NewWriteArrayList(foodCursor)
     if err != nil {
@@ -416,7 +416,7 @@ err = history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
     if err != nil {
         return err
     }
-    citiesCursor.WriteValue(bigCities.Slot())
+    citiesCursor.Write(bigCities.Slot())
 
     cities, err := xitdb.NewWriteArrayList(citiesCursor)
     if err != nil {
@@ -533,7 +533,7 @@ err = history.AppendContext(slotData, func(cursor *xitdb.WriteCursor) error {
     if err != nil {
         return err
     }
-    citiesCursor.WriteValue(bigCities.Slot())
+    citiesCursor.Write(bigCities.Slot())
 
     cities, err := xitdb.NewWriteArrayList(citiesCursor)
     if err != nil {

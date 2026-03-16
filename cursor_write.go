@@ -21,7 +21,7 @@ func (c *WriteCursor) WritePath(path []PathPart) (*WriteCursor, error) {
 	return &WriteCursor{ReadCursor: &ReadCursor{SlotPtr: slotPtr, DB: c.DB}}, nil
 }
 
-func (c *WriteCursor) WriteValue(data WriteableData) error {
+func (c *WriteCursor) Write(data WriteableData) error {
 	cursor, err := c.WritePath([]PathPart{WriteDataPart{Data: data}})
 	if err != nil {
 		return err
@@ -32,7 +32,7 @@ func (c *WriteCursor) WriteValue(data WriteableData) error {
 
 func (c *WriteCursor) WriteIfEmpty(data WriteableData) error {
 	if c.SlotPtr.Slot.Empty() {
-		return c.WriteValue(data)
+		return c.Write(data)
 	}
 	return nil
 }

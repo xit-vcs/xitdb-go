@@ -1699,7 +1699,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				return err
 			}
-			if err := foodCursor.WriteValue(fruits.Slot()); err != nil {
+			if err := foodCursor.Write(fruits.Slot()); err != nil {
 				return err
 			}
 
@@ -1807,7 +1807,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				return err
 			}
-			if err := citiesCursor.WriteValue(bigCities.Slot()); err != nil {
+			if err := citiesCursor.Write(bigCities.Slot()); err != nil {
 				return err
 			}
 
@@ -1921,7 +1921,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				return err
 			}
-			if err := citiesCursor.WriteValue(bigCities.Slot()); err != nil {
+			if err := citiesCursor.Write(bigCities.Slot()); err != nil {
 				return err
 			}
 
