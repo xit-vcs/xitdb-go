@@ -59,7 +59,7 @@ func NewWriteLinkedArrayList(cursor *WriteCursor) (*WriteLinkedArrayList, error)
 func (a *WriteLinkedArrayList) Put(index int64, data WriteableData) error {
 	_, err := a.writeCursor.WritePath([]PathPart{
 		LinkedArrayListGet{Index: index},
-		WriteDataPart{Data: data},
+		WriteData{Data: data},
 	})
 	return err
 }
@@ -71,7 +71,7 @@ func (a *WriteLinkedArrayList) PutCursor(index int64) (*WriteCursor, error) {
 func (a *WriteLinkedArrayList) Append(data WriteableData) error {
 	_, err := a.writeCursor.WritePath([]PathPart{
 		LinkedArrayListAppend{},
-		WriteDataPart{Data: data},
+		WriteData{Data: data},
 	})
 	return err
 }
@@ -93,7 +93,7 @@ func (a *WriteLinkedArrayList) Concat(list Slot) error {
 func (a *WriteLinkedArrayList) Insert(index int64, data WriteableData) error {
 	_, err := a.writeCursor.WritePath([]PathPart{
 		LinkedArrayListInsertPart{Index: index},
-		WriteDataPart{Data: data},
+		WriteData{Data: data},
 	})
 	return err
 }

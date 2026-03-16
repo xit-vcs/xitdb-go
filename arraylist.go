@@ -59,7 +59,7 @@ func NewWriteArrayList(cursor *WriteCursor) (*WriteArrayList, error) {
 func (a *WriteArrayList) Put(index int64, data WriteableData) error {
 	_, err := a.writeCursor.WritePath([]PathPart{
 		ArrayListGet{Index: index},
-		WriteDataPart{Data: data},
+		WriteData{Data: data},
 	})
 	return err
 }
@@ -71,7 +71,7 @@ func (a *WriteArrayList) PutCursor(index int64) (*WriteCursor, error) {
 func (a *WriteArrayList) Append(data WriteableData) error {
 	_, err := a.writeCursor.WritePath([]PathPart{
 		ArrayListAppend{},
-		WriteDataPart{Data: data},
+		WriteData{Data: data},
 	})
 	return err
 }
@@ -83,7 +83,7 @@ func (a *WriteArrayList) AppendCursor() (*WriteCursor, error) {
 func (a *WriteArrayList) AppendContext(data WriteableData, fn ContextFunction) error {
 	_, err := a.writeCursor.WritePath([]PathPart{
 		ArrayListAppend{},
-		WriteDataPart{Data: data},
+		WriteData{Data: data},
 		ContextPart{Function: fn},
 	})
 	return err

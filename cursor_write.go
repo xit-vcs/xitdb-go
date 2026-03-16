@@ -22,7 +22,7 @@ func (c *WriteCursor) WritePath(path []PathPart) (*WriteCursor, error) {
 }
 
 func (c *WriteCursor) Write(data WriteableData) error {
-	cursor, err := c.WritePath([]PathPart{WriteDataPart{Data: data}})
+	cursor, err := c.WritePath([]PathPart{WriteData{Data: data}})
 	if err != nil {
 		return err
 	}

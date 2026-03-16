@@ -1042,11 +1042,11 @@ func (p HashMapRemovePart) readSlotPointer(db *Database, isTopLevel bool, writeM
 
 // WriteData
 
-type WriteDataPart struct {
+type WriteData struct {
 	Data WriteableData
 }
 
-func (p WriteDataPart) readSlotPointer(db *Database, isTopLevel bool, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p WriteData) readSlotPointer(db *Database, isTopLevel bool, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
 	if writeMode == ReadOnly {
 		return SlotPointer{}, ErrWriteNotAllowed
 	}

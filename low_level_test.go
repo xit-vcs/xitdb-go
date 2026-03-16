@@ -114,7 +114,7 @@ func testSlice(t *testing.T, core Core, hasher Hasher, originalSize int, sliceOf
 	_, err = rootCursor.WritePath([]PathPart{
 		ArrayListInit{},
 		ArrayListAppend{},
-		WriteDataPart{Data: lastSlot},
+		WriteData{Data: lastSlot},
 		HashMapInitPart{},
 		ContextPart{Function: func(cursor *WriteCursor) error {
 			values := make([]int64, 0)
@@ -127,7 +127,7 @@ func testSlice(t *testing.T, core Core, hasher Hasher, originalSize int, sliceOf
 					HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("even"))}},
 					LinkedArrayListInit{},
 					LinkedArrayListAppend{},
-					WriteDataPart{Data: NewUint(uint64(n))},
+					WriteData{Data: NewUint(uint64(n))},
 				})
 				if err != nil {
 					return err
@@ -143,7 +143,7 @@ func testSlice(t *testing.T, core Core, hasher Hasher, originalSize int, sliceOf
 			}
 			evenListSliceCursor, err := cursor.WritePath([]PathPart{
 				HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("even-slice"))}},
-				WriteDataPart{Data: evenListCursor.SlotPtr.Slot},
+				WriteData{Data: evenListCursor.SlotPtr.Slot},
 				LinkedArrayListInit{},
 				LinkedArrayListSlicePart{Offset: sliceOffset, Size: sliceSize},
 			})
@@ -203,7 +203,7 @@ func testSlice(t *testing.T, core Core, hasher Hasher, originalSize int, sliceOf
 			// concat the slice with itself
 			_, err = cursor.WritePath([]PathPart{
 				HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("combo"))}},
-				WriteDataPart{Data: evenListSliceCursor.SlotPtr.Slot},
+				WriteData{Data: evenListSliceCursor.SlotPtr.Slot},
 				LinkedArrayListInit{},
 				LinkedArrayListConcatPart{List: evenListSliceCursor.SlotPtr.Slot},
 			})
@@ -234,7 +234,7 @@ func testSlice(t *testing.T, core Core, hasher Hasher, originalSize int, sliceOf
 				HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("even-slice"))}},
 				LinkedArrayListInit{},
 				LinkedArrayListAppend{},
-				WriteDataPart{Data: NewUint(3)},
+				WriteData{Data: NewUint(3)},
 			})
 			if err != nil {
 				return err
@@ -280,7 +280,7 @@ func testConcat(t *testing.T, core Core, hasher Hasher, listASize int64, listBSi
 	_, err = rootCursor.WritePath([]PathPart{
 		ArrayListInit{},
 		ArrayListAppend{},
-		WriteDataPart{Data: lastSlot},
+		WriteData{Data: lastSlot},
 		HashMapInitPart{},
 		ContextPart{Function: func(cursor *WriteCursor) error {
 			// create even list
@@ -298,7 +298,7 @@ func testConcat(t *testing.T, core Core, hasher Hasher, listASize int64, listBSi
 					HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("even"))}},
 					LinkedArrayListInit{},
 					LinkedArrayListAppend{},
-					WriteDataPart{Data: NewUint(uint64(n))},
+					WriteData{Data: NewUint(uint64(n))},
 				})
 				if err != nil {
 					return err
@@ -320,7 +320,7 @@ func testConcat(t *testing.T, core Core, hasher Hasher, listASize int64, listBSi
 					HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("odd"))}},
 					LinkedArrayListInit{},
 					LinkedArrayListAppend{},
-					WriteDataPart{Data: NewUint(uint64(n))},
+					WriteData{Data: NewUint(uint64(n))},
 				})
 				if err != nil {
 					return err
@@ -341,7 +341,7 @@ func testConcat(t *testing.T, core Core, hasher Hasher, listASize int64, listBSi
 	_, err = rootCursor.WritePath([]PathPart{
 		ArrayListInit{},
 		ArrayListAppend{},
-		WriteDataPart{Data: lastSlot2},
+		WriteData{Data: lastSlot2},
 		HashMapInitPart{},
 		ContextPart{Function: func(cursor *WriteCursor) error {
 			// get the even list
@@ -363,7 +363,7 @@ func testConcat(t *testing.T, core Core, hasher Hasher, listASize int64, listBSi
 			// concat the lists
 			comboListCursor, err := cursor.WritePath([]PathPart{
 				HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("combo"))}},
-				WriteDataPart{Data: evenListCursor.SlotPtr.Slot},
+				WriteData{Data: evenListCursor.SlotPtr.Slot},
 				LinkedArrayListInit{},
 				LinkedArrayListConcatPart{List: oddListCursor.SlotPtr.Slot},
 			})
@@ -455,7 +455,7 @@ func testInsertAndRemove(t *testing.T, core Core, hasher Hasher, originalSize in
 	_, err = rootCursor.WritePath([]PathPart{
 		ArrayListInit{},
 		ArrayListAppend{},
-		WriteDataPart{Data: lastSlot},
+		WriteData{Data: lastSlot},
 		HashMapInitPart{},
 		ContextPart{Function: func(cursor *WriteCursor) error {
 			values := make([]int64, 0)
@@ -471,7 +471,7 @@ func testInsertAndRemove(t *testing.T, core Core, hasher Hasher, originalSize in
 					HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("even"))}},
 					LinkedArrayListInit{},
 					LinkedArrayListAppend{},
-					WriteDataPart{Data: NewUint(uint64(n))},
+					WriteData{Data: NewUint(uint64(n))},
 				})
 				if err != nil {
 					return err
@@ -487,7 +487,7 @@ func testInsertAndRemove(t *testing.T, core Core, hasher Hasher, originalSize in
 			}
 			evenListInsertCursor, err := cursor.WritePath([]PathPart{
 				HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("even-insert"))}},
-				WriteDataPart{Data: evenListCursor.SlotPtr.Slot},
+				WriteData{Data: evenListCursor.SlotPtr.Slot},
 				LinkedArrayListInit{},
 			})
 			if err != nil {
@@ -495,7 +495,7 @@ func testInsertAndRemove(t *testing.T, core Core, hasher Hasher, originalSize in
 			}
 			_, err = evenListInsertCursor.WritePath([]PathPart{
 				LinkedArrayListInsertPart{Index: insertIndex},
-				WriteDataPart{Data: NewUint(uint64(insertValue))},
+				WriteData{Data: NewUint(uint64(insertValue))},
 			})
 			if err != nil {
 				return err
@@ -564,7 +564,7 @@ func testInsertAndRemove(t *testing.T, core Core, hasher Hasher, originalSize in
 	_, err = rootCursor.WritePath([]PathPart{
 		ArrayListInit{},
 		ArrayListAppend{},
-		WriteDataPart{Data: lastSlot2},
+		WriteData{Data: lastSlot2},
 		HashMapInitPart{},
 		ContextPart{Function: func(cursor *WriteCursor) error {
 			values := make([]int64, 0)
@@ -758,7 +758,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		_, err = rootCursor.WritePath([]PathPart{
 			ArrayListInit{},
 			ArrayListAppend{},
-			WriteDataPart{Data: lastSlot},
+			WriteData{Data: lastSlot},
 			HashMapInitPart{},
 			HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
 			ContextPart{Function: func(cursor *WriteCursor) error {
@@ -805,7 +805,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
 				ContextPart{Function: func(cursor *WriteCursor) error {
@@ -903,7 +903,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
 				ContextPart{Function: func(cursor *WriteCursor) error {
@@ -955,7 +955,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			_, writeErr := rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
 				ContextPart{Function: func(cursor *WriteCursor) error {
@@ -1005,7 +1005,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			barCursor, err := rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
 			})
@@ -1028,7 +1028,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				nextBarCursor, err := rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: lastSlot},
+					WriteData{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
 				})
@@ -1050,7 +1050,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				nextBarCursor, err := rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: lastSlot},
+					WriteData{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
 				})
@@ -1091,7 +1091,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			barCursor, err := rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
 			})
@@ -1133,7 +1133,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				barCursor, err := rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: lastSlot},
+					WriteData{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
 				})
@@ -1188,7 +1188,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				barCursor, err := rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: lastSlot},
+					WriteData{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
 				})
@@ -1243,7 +1243,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				barCursor, err := rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: lastSlot},
+					WriteData{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
 				})
@@ -1315,10 +1315,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			barSlotCursor, err := rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
-				WriteDataPart{Data: NewString("bar")},
+				WriteData{Data: NewString("bar")},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -1333,10 +1333,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
-				WriteDataPart{Data: barSlot},
+				WriteData{Data: barSlot},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -1392,10 +1392,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: smallConflictKey}},
-				WriteDataPart{Data: NewString("small")},
+				WriteData{Data: NewString("small")},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -1414,10 +1414,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: conflictKey}},
-				WriteDataPart{Data: NewString("hello")},
+				WriteData{Data: NewString("hello")},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -1459,10 +1459,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: conflictKey}},
-				WriteDataPart{Data: NewString("goodbye")},
+				WriteData{Data: NewString("goodbye")},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -1531,7 +1531,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				_, err = rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: lastSlot},
+					WriteData{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapRemovePart{Hash: smallConflictKey},
 				})
@@ -1610,7 +1610,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				_, err = rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: lastSlot},
+					WriteData{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapRemovePart{Hash: conflictKey},
 				})
@@ -1677,10 +1677,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				_, err = rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: lastSlot},
+					WriteData{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
-					WriteDataPart{Data: NewUint(42)},
+					WriteData{Data: NewUint(42)},
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -1710,10 +1710,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				_, err = rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: lastSlot},
+					WriteData{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
-					WriteDataPart{Data: NewInt(-42)},
+					WriteData{Data: NewInt(-42)},
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -1743,10 +1743,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				_, err = rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: lastSlot},
+					WriteData{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
-					WriteDataPart{Data: NewFloat(42.5)},
+					WriteData{Data: NewFloat(42.5)},
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -1775,7 +1775,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapRemovePart{Hash: fooKey},
 			})
@@ -1791,7 +1791,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			_, removeErr := rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapRemovePart{Hash: db.digest([]byte("doesn't exist"))},
 			})
@@ -1821,12 +1821,12 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				_, err = rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: lastSlot},
+					WriteData{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("fruits"))}},
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: NewString("apple")},
+					WriteData{Data: NewString("apple")},
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -1855,12 +1855,12 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				_, err = rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: lastSlot},
+					WriteData{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("fruits"))}},
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: NewString("banana")},
+					WriteData{Data: NewString("banana")},
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -1902,12 +1902,12 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				_, err = rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: lastSlot},
+					WriteData{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("fruits"))}},
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: NewString("pear")},
+					WriteData{Data: NewString("pear")},
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -1921,12 +1921,12 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				_, err = rootCursor.WritePath([]PathPart{
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: lastSlot},
+					WriteData{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("fruits"))}},
 					ArrayListInit{},
 					ArrayListAppend{},
-					WriteDataPart{Data: NewString("grape")},
+					WriteData{Data: NewString("grape")},
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -1986,10 +1986,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: watKey}},
-				WriteDataPart{Data: NewString(value)},
+				WriteData{Data: NewString(value)},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -2024,10 +2024,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			_, writeErr := rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: watKey}},
-				WriteDataPart{Data: NewString(value)},
+				WriteData{Data: NewString(value)},
 				ContextPart{Function: func(cursor *WriteCursor) error {
 					if index == 32 {
 						return errors.New("intentional error")
@@ -2046,10 +2046,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		_, err = rootCursor.WritePath([]PathPart{
 			ArrayListInit{},
 			ArrayListAppend{},
-			WriteDataPart{Data: lastSlot},
+			WriteData{Data: lastSlot},
 			HashMapInitPart{},
 			HashMapGetPart{Target: HashMapGetValue{Hash: watKey}},
-			WriteDataPart{Data: NewString("wat32")},
+			WriteData{Data: NewString("wat32")},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -2113,10 +2113,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: NewString(value)},
+				WriteData{Data: NewString(value)},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -2187,10 +2187,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		_, err = rootCursor.WritePath([]PathPart{
 			ArrayListInit{},
 			ArrayListAppend{},
-			WriteDataPart{Data: lastSlot},
+			WriteData{Data: lastSlot},
 			ArrayListInit{},
 			ArrayListGet{Index: -1},
-			WriteDataPart{Data: NewString("hello")},
+			WriteData{Data: NewString("hello")},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -2220,10 +2220,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		_, err = rootCursor.WritePath([]PathPart{
 			ArrayListInit{},
 			ArrayListAppend{},
-			WriteDataPart{Data: lastSlot},
+			WriteData{Data: lastSlot},
 			ArrayListInit{},
 			ArrayListGet{Index: -1},
-			WriteDataPart{Data: NewString("goodbye")},
+			WriteData{Data: NewString("goodbye")},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -2287,10 +2287,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: NewString(value)},
+				WriteData{Data: NewString(value)},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -2341,7 +2341,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				ArrayListGet{Index: -1},
 				ArrayListInit{},
 				ArrayListGet{Index: 0},
-				WriteDataPart{Data: nil},
+				WriteData{Data: nil},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -2398,10 +2398,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: watKey}},
-				WriteDataPart{Data: NewString(value)},
+				WriteData{Data: NewString(value)},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -2430,10 +2430,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		_, err = rootCursor.WritePath([]PathPart{
 			ArrayListInit{},
 			ArrayListAppend{},
-			WriteDataPart{Data: lastSlot},
+			WriteData{Data: lastSlot},
 			HashMapInitPart{},
 			HashMapGetPart{Target: HashMapGetKey{Hash: fooKey}},
-			WriteDataPart{Data: NewString("foo")},
+			WriteData{Data: NewString("foo")},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -2445,10 +2445,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		_, err = rootCursor.WritePath([]PathPart{
 			ArrayListInit{},
 			ArrayListAppend{},
-			WriteDataPart{Data: lastSlot},
+			WriteData{Data: lastSlot},
 			HashMapInitPart{},
 			HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
-			WriteDataPart{Data: NewUint(42)},
+			WriteData{Data: NewUint(42)},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -2462,7 +2462,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		_, err = rootCursor.WritePath([]PathPart{
 			ArrayListInit{},
 			ArrayListAppend{},
-			WriteDataPart{Data: lastSlot},
+			WriteData{Data: lastSlot},
 			HashMapInitPart{},
 			HashMapRemovePart{Hash: db.digest([]byte("wat0"))},
 		})
@@ -2517,7 +2517,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			innerCursor, err := rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -2585,7 +2585,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		_, err = rootCursor.WritePath([]PathPart{
 			ArrayListInit{},
 			ArrayListAppend{},
-			WriteDataPart{Data: lastSlot},
+			WriteData{Data: lastSlot},
 			HashMapInitPart{},
 			ContextPart{Function: func(cursor *WriteCursor) error {
 				values := make([]int64, 0)
@@ -2598,7 +2598,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 						HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("even"))}},
 						LinkedArrayListInit{},
 						LinkedArrayListAppend{},
-						WriteDataPart{Data: NewUint(uint64(n))},
+						WriteData{Data: NewUint(uint64(n))},
 					})
 					if err != nil {
 						return err
@@ -2643,7 +2643,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				// concat the list with itself multiple times
 				comboListCursor, err := cursor.WritePath([]PathPart{
 					HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("combo"))}},
-					WriteDataPart{Data: evenListCursor.SlotPtr.Slot},
+					WriteData{Data: evenListCursor.SlotPtr.Slot},
 					LinkedArrayListInit{},
 				})
 				if err != nil {
@@ -2662,7 +2662,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				_, err = cursor.WritePath([]PathPart{
 					HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("combo"))}},
 					LinkedArrayListAppend{},
-					WriteDataPart{Data: NewUint(3)},
+					WriteData{Data: NewUint(3)},
 				})
 				if err != nil {
 					return err
@@ -2685,7 +2685,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 					_, err := cursor.WritePath([]PathPart{
 						HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("combo"))}},
 						LinkedArrayListAppend{},
-						WriteDataPart{Data: NewUint(1)},
+						WriteData{Data: NewUint(1)},
 					})
 					if err != nil {
 						return err
@@ -2724,7 +2724,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 				LinkedArrayListInit{},
 				LinkedArrayListAppend{},
 			})
@@ -2742,10 +2742,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 				LinkedArrayListInit{},
 				LinkedArrayListAppend{},
-				WriteDataPart{Data: nil},
+				WriteData{Data: nil},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -2771,10 +2771,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		_, err = rootCursor.WritePath([]PathPart{
 			ArrayListInit{},
 			ArrayListAppend{},
-			WriteDataPart{Data: lastSlot},
+			WriteData{Data: lastSlot},
 			LinkedArrayListInit{},
 			LinkedArrayListAppend{},
-			WriteDataPart{Data: NewUint(42)},
+			WriteData{Data: NewUint(42)},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -2788,10 +2788,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 				LinkedArrayListInit{},
 				LinkedArrayListInsertPart{Index: 0},
-				WriteDataPart{Data: NewUint(uint64(i))},
+				WriteData{Data: NewUint(uint64(i))},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -2817,10 +2817,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		_, err = rootCursor.WritePath([]PathPart{
 			ArrayListInit{},
 			ArrayListAppend{},
-			WriteDataPart{Data: lastSlot},
+			WriteData{Data: lastSlot},
 			LinkedArrayListInit{},
 			LinkedArrayListAppend{},
-			WriteDataPart{Data: NewUint(42)},
+			WriteData{Data: NewUint(42)},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -2834,10 +2834,10 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
 				ArrayListAppend{},
-				WriteDataPart{Data: lastSlot},
+				WriteData{Data: lastSlot},
 				LinkedArrayListInit{},
 				LinkedArrayListInsertPart{Index: int64(i)},
-				WriteDataPart{Data: NewUint(uint64(i))},
+				WriteData{Data: NewUint(uint64(i))},
 			})
 			if err != nil {
 				t.Fatal(err)

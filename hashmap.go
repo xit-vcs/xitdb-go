@@ -198,7 +198,7 @@ func (m *WriteHashMap) RemoveByBytes(key Bytes) (bool, error) {
 func (m *WriteHashMap) PutByHash(hash []byte, data WriteableData) error {
 	_, err := m.writeCursor.WritePath([]PathPart{
 		HashMapGetPart{Target: HashMapGetValue{Hash: hash}},
-		WriteDataPart{Data: data},
+		WriteData{Data: data},
 	})
 	return err
 }
