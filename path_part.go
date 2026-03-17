@@ -1116,13 +1116,13 @@ func (p WriteData) readSlotPointer(db *Database, isTopLevel bool, writeMode Writ
 	return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr)
 }
 
-// ContextPart
+// Context
 
-type ContextPart struct {
+type Context struct {
 	Function ContextFunction
 }
 
-func (p ContextPart) readSlotPointer(db *Database, isTopLevel bool, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p Context) readSlotPointer(db *Database, isTopLevel bool, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
 	if writeMode == ReadOnly {
 		return SlotPointer{}, ErrWriteNotAllowed
 	}

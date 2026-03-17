@@ -84,7 +84,7 @@ func (a *WriteArrayList) AppendContext(data WriteableData, fn ContextFunction) e
 	_, err := a.writeCursor.WritePath([]PathPart{
 		ArrayListAppend{},
 		WriteData{Data: data},
-		ContextPart{Function: fn},
+		Context{Function: fn},
 	})
 	return err
 }

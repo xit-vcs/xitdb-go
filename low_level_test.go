@@ -116,7 +116,7 @@ func testSlice(t *testing.T, core Core, hasher Hasher, originalSize int, sliceOf
 		ArrayListAppend{},
 		WriteData{Data: lastSlot},
 		HashMapInitPart{},
-		ContextPart{Function: func(cursor *WriteCursor) error {
+		Context{Function: func(cursor *WriteCursor) error {
 			values := make([]int64, 0)
 
 			// create list
@@ -282,7 +282,7 @@ func testConcat(t *testing.T, core Core, hasher Hasher, listASize int64, listBSi
 		ArrayListAppend{},
 		WriteData{Data: lastSlot},
 		HashMapInitPart{},
-		ContextPart{Function: func(cursor *WriteCursor) error {
+		Context{Function: func(cursor *WriteCursor) error {
 			// create even list
 			_, err := cursor.WritePath([]PathPart{
 				HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("even"))}},
@@ -343,7 +343,7 @@ func testConcat(t *testing.T, core Core, hasher Hasher, listASize int64, listBSi
 		ArrayListAppend{},
 		WriteData{Data: lastSlot2},
 		HashMapInitPart{},
-		ContextPart{Function: func(cursor *WriteCursor) error {
+		Context{Function: func(cursor *WriteCursor) error {
 			// get the even list
 			evenListCursor, err := cursor.ReadPath([]PathPart{
 				HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("even"))}},
@@ -457,7 +457,7 @@ func testInsertAndRemove(t *testing.T, core Core, hasher Hasher, originalSize in
 		ArrayListAppend{},
 		WriteData{Data: lastSlot},
 		HashMapInitPart{},
-		ContextPart{Function: func(cursor *WriteCursor) error {
+		Context{Function: func(cursor *WriteCursor) error {
 			values := make([]int64, 0)
 
 			// create list
@@ -566,7 +566,7 @@ func testInsertAndRemove(t *testing.T, core Core, hasher Hasher, originalSize in
 		ArrayListAppend{},
 		WriteData{Data: lastSlot2},
 		HashMapInitPart{},
-		ContextPart{Function: func(cursor *WriteCursor) error {
+		Context{Function: func(cursor *WriteCursor) error {
 			values := make([]int64, 0)
 
 			for i := 0; i < originalSize; i++ {
@@ -761,7 +761,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			WriteData{Data: lastSlot},
 			HashMapInitPart{},
 			HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
-			ContextPart{Function: func(cursor *WriteCursor) error {
+			Context{Function: func(cursor *WriteCursor) error {
 				assertEqual(t, TagNone, cursor.Slot().Tag)
 				writer, err := cursor.Writer()
 				if err != nil {
@@ -808,7 +808,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				WriteData{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
-				ContextPart{Function: func(cursor *WriteCursor) error {
+				Context{Function: func(cursor *WriteCursor) error {
 					if cursor.Slot().Tag == TagNone {
 						t.Fatal("expected tag != TagNone")
 					}
@@ -906,7 +906,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				WriteData{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
-				ContextPart{Function: func(cursor *WriteCursor) error {
+				Context{Function: func(cursor *WriteCursor) error {
 					if cursor.Slot().Tag == TagNone {
 						t.Fatal("expected tag != TagNone")
 					}
@@ -958,7 +958,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				WriteData{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: fooKey}},
-				ContextPart{Function: func(cursor *WriteCursor) error {
+				Context{Function: func(cursor *WriteCursor) error {
 					writer, err := cursor.Writer()
 					if err != nil {
 						return err
@@ -2028,7 +2028,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: watKey}},
 				WriteData{Data: NewString(value)},
-				ContextPart{Function: func(cursor *WriteCursor) error {
+				Context{Function: func(cursor *WriteCursor) error {
 					if index == 32 {
 						return errors.New("intentional error")
 					}
@@ -2587,7 +2587,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			ArrayListAppend{},
 			WriteData{Data: lastSlot},
 			HashMapInitPart{},
-			ContextPart{Function: func(cursor *WriteCursor) error {
+			Context{Function: func(cursor *WriteCursor) error {
 				values := make([]int64, 0)
 
 				// create list
