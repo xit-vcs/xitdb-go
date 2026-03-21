@@ -695,21 +695,16 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 
 	// save hash id in header
 	{
-		hashID, err := StringToID("sha1")
-		if err != nil {
-			t.Fatal(err)
-		}
 		hasherWithHashID := Hasher{
 			Hash: sha1.New(),
-			ID:   hashID,
+			ID:   BytesToID([4]byte{'s', 'h', 'a', '1'}),
 		}
 
 		// make empty database
 		if err := core.SetLength(0); err != nil {
 			t.Fatal(err)
 		}
-		_, err = NewDatabase(core, hasherWithHashID)
-		if err != nil {
+		if _, err := NewDatabase(core, hasherWithHashID); err != nil {
 			t.Fatal(err)
 		}
 
@@ -722,12 +717,12 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 			t.Fatal(err)
 		}
 		assertEqual(t, uint16(20), header.HashSize)
-		assertEqual(t, "sha1", IDToString(header.HashID))
+		assertEqual(t, [4]byte{'s', 'h', 'a', '1'}, IDToBytes(header.HashID))
 
 		// determine the hashing algorithm
 		var determinedHasher Hasher
-		switch IDToString(header.HashID) {
-		case "sha1":
+		switch IDToBytes(header.HashID) {
+		case [4]byte{'s', 'h', 'a', '1'}:
 			determinedHasher = Hasher{
 				Hash: sha1.New(),
 				ID:   header.HashID,

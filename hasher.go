@@ -2,7 +2,6 @@ package xitdb
 
 import (
 	"encoding/binary"
-	"fmt"
 	"hash"
 )
 
@@ -11,16 +10,12 @@ type Hasher struct {
 	ID   uint32
 }
 
-func StringToID(name string) (uint32, error) {
-	b := []byte(name)
-	if len(b) != 4 {
-		return 0, fmt.Errorf("name must be exactly four bytes long")
-	}
-	return binary.BigEndian.Uint32(b), nil
+func BytesToID(name [4]byte) uint32 {
+	return binary.BigEndian.Uint32(name[:])
 }
 
-func IDToString(id uint32) string {
+func IDToBytes(id uint32) [4]byte {
 	var buf [4]byte
 	binary.BigEndian.PutUint32(buf[:], id)
-	return string(buf[:])
+	return buf
 }

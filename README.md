@@ -725,13 +725,9 @@ fmt.Println(header.HashSize) // 20
 The hash size alone does not disambiguate hashing algorithms, though. In addition, xitdb reserves four bytes in the header that you can use to put the name of the algorithm. You must provide it in the `Hasher`:
 
 ```go
-id, err := xitdb.StringToID("sha1")
-if err != nil {
-    log.Fatal(err)
-}
 hasher := xitdb.Hasher{
     Hash: sha1.New(),
-    ID:   id,
+    ID:   xitdb.BytesToID([4]byte{'s', 'h', 'a', '1'}),
 }
 ```
 
@@ -745,7 +741,7 @@ header, err := xitdb.ReadHeader(core)
 if err != nil {
     log.Fatal(err)
 }
-fmt.Println(xitdb.IDToString(header.HashID)) // "sha1"
+fmt.Println(xitdb.IDToBytes(header.HashID)) // [4]byte{'s', 'h', 'a', '1'}
 ```
 
 If you want to use SHA-256, I recommend using `sha2` as the hash id. You can then distinguish between SHA-256 and SHA-512 using the hash size, like this:
@@ -760,13 +756,13 @@ if err != nil {
 }
 
 var hasher xitdb.Hasher
-switch xitdb.IDToString(header.HashID) {
-case "sha1":
+switch xitdb.IDToBytes(header.HashID) {
+case [4]byte{'s', 'h', 'a', '1'}:
     hasher = xitdb.Hasher{
         Hash: sha1.New(),
         ID:   header.HashID,
     }
-case "sha2":
+case [4]byte{'s', 'h', 'a', '2'}:
     switch header.HashSize {
     case 32:
         hasher = xitdb.Hasher{

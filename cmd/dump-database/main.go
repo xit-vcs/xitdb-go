@@ -376,14 +376,14 @@ func formatHex(b []byte) string {
 }
 
 func hasherFromHeader(header xitdb.Header) (xitdb.Hasher, error) {
-	id := xitdb.IDToString(header.HashID)
+	id := xitdb.IDToBytes(header.HashID)
 	switch id {
-	case "sha1":
+	case [4]byte{'s', 'h', 'a', '1'}:
 		return xitdb.Hasher{
 			Hash: sha1.New(),
 			ID:   header.HashID,
 		}, nil
-	case "sha2":
+	case [4]byte{'s', 'h', 'a', '2'}:
 		switch header.HashSize {
 		case 32:
 			return xitdb.Hasher{

@@ -17,10 +17,9 @@ func sha1Hasher() Hasher {
 }
 
 func sha1HasherWithID() Hasher {
-	id, _ := StringToID("sha1")
 	return Hasher{
 		Hash: sha1.New(),
-		ID:   id,
+		ID:   BytesToID([4]byte{'s', 'h', 'a', '1'}),
 	}
 }
 
