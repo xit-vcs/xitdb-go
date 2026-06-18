@@ -327,11 +327,11 @@ func (c *ReadCursor) Count() (int64, error) {
 		if err := c.DB.Core.SeekTo(c.SlotPtr.Slot.Value); err != nil {
 			return 0, err
 		}
-		var headerBytes [LinkedArrayListHeaderLength]byte
+		var headerBytes [BTreeHeaderLength]byte
 		if err := c.DB.Core.Read(headerBytes[:]); err != nil {
 			return 0, err
 		}
-		header, err := LinkedArrayListHeaderFromBytes(headerBytes[:])
+		header, err := BTreeHeaderFromBytes(headerBytes[:])
 		if err != nil {
 			return 0, err
 		}
@@ -410,21 +410,23 @@ func newCursorIterator(cursor *ReadCursor) (*CursorIterator, error) {
 		}
 		it.size = count
 		it.index = 0
-		level, err := initIterStack(cursor, header.Ptr, IndexBlockSize)
+		level, err := initIterStack(cursor, header.Ptr)
 		if err != nil {
 			return nil, err
 		}
 		it.stack = []iterLevel{level}
 	case TagLinkedArrayList:
+		// backed by a b-tree: read the header, then walk from the root node's
+		// value/child slots (skipping its kind+num header)
 		position := cursor.SlotPtr.Slot.Value
 		if err := cursor.DB.Core.SeekTo(position); err != nil {
 			return nil, err
 		}
-		var headerBytes [LinkedArrayListHeaderLength]byte
+		var headerBytes [BTreeHeaderLength]byte
 		if err := cursor.DB.Core.Read(headerBytes[:]); err != nil {
 			return nil, err
 		}
-		header, err := LinkedArrayListHeaderFromBytes(headerBytes[:])
+		header, err := BTreeHeaderFromBytes(headerBytes[:])
 		if err != nil {
 			return nil, err
 		}
@@ -434,7 +436,7 @@ func newCursorIterator(cursor *ReadCursor) (*CursorIterator, error) {
 		}
 		it.size = count
 		it.index = 0
-		level, err := initIterStack(cursor, header.Ptr, LinkedArrayListIndexBlockSize)
+		level, err := initIterStack(cursor, header.RootPtr+BTreeNodeHeaderSize)
 		if err != nil {
 			return nil, err
 		}
@@ -442,7 +444,7 @@ func newCursorIterator(cursor *ReadCursor) (*CursorIterator, error) {
 	case TagHashMap, TagHashSet:
 		it.size = 0
 		it.index = 0
-		level, err := initIterStack(cursor, cursor.SlotPtr.Slot.Value, IndexBlockSize)
+		level, err := initIterStack(cursor, cursor.SlotPtr.Slot.Value)
 		if err != nil {
 			return nil, err
 		}
@@ -450,7 +452,7 @@ func newCursorIterator(cursor *ReadCursor) (*CursorIterator, error) {
 	case TagCountedHashMap, TagCountedHashSet:
 		it.size = 0
 		it.index = 0
-		level, err := initIterStack(cursor, cursor.SlotPtr.Slot.Value+8, IndexBlockSize)
+		level, err := initIterStack(cursor, cursor.SlotPtr.Slot.Value+8)
 		if err != nil {
 			return nil, err
 		}
@@ -462,25 +464,34 @@ func newCursorIterator(cursor *ReadCursor) (*CursorIterator, error) {
 	return it, nil
 }
 
-func initIterStack(cursor *ReadCursor, position int64, blockSize int) (iterLevel, error) {
-	if err := cursor.DB.Core.SeekTo(position); err != nil {
-		return iterLevel{}, err
-	}
-	indexBlockBytes := make([]byte, blockSize)
-	if err := cursor.DB.Core.Read(indexBlockBytes); err != nil {
-		return iterLevel{}, err
-	}
+// read a 16-slot index block (the iterable structures all use 9-byte slots in their
+// index/node blocks)
+func readSlotBlock(cursor *ReadCursor, position int64) ([SlotCount]Slot, error) {
 	var block [SlotCount]Slot
-	slotSize := blockSize / SlotCount
+	if err := cursor.DB.Core.SeekTo(position); err != nil {
+		return block, err
+	}
+	indexBlockBytes := make([]byte, IndexBlockSize)
+	if err := cursor.DB.Core.Read(indexBlockBytes); err != nil {
+		return block, err
+	}
 	for i := 0; i < SlotCount; i++ {
 		var sb [SlotLength]byte
-		copy(sb[:], indexBlockBytes[i*slotSize:i*slotSize+SlotLength])
+		copy(sb[:], indexBlockBytes[i*SlotLength:i*SlotLength+SlotLength])
 		block[i] = SlotFromBytes(sb)
+	}
+	return block, nil
+}
+
+func initIterStack(cursor *ReadCursor, position int64) (iterLevel, error) {
+	block, err := readSlotBlock(cursor, position)
+	if err != nil {
+		return iterLevel{}, err
 	}
 	return iterLevel{position: position, block: block, index: 0}, nil
 }
 
-func (it *CursorIterator) nextInternal(blockSize int) (*ReadCursor, error) {
+func (it *CursorIterator) nextInternal(nodeOffset int64) (*ReadCursor, error) {
 	for len(it.stack) > 0 {
 		level := &it.stack[len(it.stack)-1]
 		if int(level.index) == len(level.block) {
@@ -493,20 +504,11 @@ func (it *CursorIterator) nextInternal(blockSize int) (*ReadCursor, error) {
 
 		nextSlot := level.block[level.index]
 		if nextSlot.Tag == TagIndex {
-			nextPos := nextSlot.Value
-			if err := it.cursor.DB.Core.SeekTo(nextPos); err != nil {
+			// nodeOffset skips a b-tree node's kind+num header
+			nextPos := nextSlot.Value + nodeOffset
+			block, err := readSlotBlock(it.cursor, nextPos)
+			if err != nil {
 				return nil, err
-			}
-			indexBlockBytes := make([]byte, blockSize)
-			if err := it.cursor.DB.Core.Read(indexBlockBytes); err != nil {
-				return nil, err
-			}
-			var block [SlotCount]Slot
-			slotSize := blockSize / SlotCount
-			for i := 0; i < SlotCount; i++ {
-				var sb [SlotLength]byte
-				copy(sb[:], indexBlockBytes[i*slotSize:i*slotSize+SlotLength])
-				block[i] = SlotFromBytes(sb)
 			}
 			it.stack = append(it.stack, iterLevel{position: nextPos, block: block, index: 0})
 			continue
@@ -540,7 +542,7 @@ func (c *ReadCursor) All() iter.Seq2[*ReadCursor, error] {
 		case TagArrayList:
 			for it.index < it.size {
 				it.index++
-				cursor, err := it.nextInternal(IndexBlockSize)
+				cursor, err := it.nextInternal(0)
 				if err != nil {
 					if !yield(nil, err) {
 						return
@@ -556,7 +558,9 @@ func (c *ReadCursor) All() iter.Seq2[*ReadCursor, error] {
 		case TagLinkedArrayList:
 			for it.index < it.size {
 				it.index++
-				cursor, err := it.nextInternal(LinkedArrayListIndexBlockSize)
+				// b-tree nodes have a kind+num header before their slots, so child
+				// pointers are offset by BTreeNodeHeaderSize
+				cursor, err := it.nextInternal(BTreeNodeHeaderSize)
 				if err != nil {
 					if !yield(nil, err) {
 						return
@@ -571,7 +575,7 @@ func (c *ReadCursor) All() iter.Seq2[*ReadCursor, error] {
 			}
 		case TagHashMap, TagHashSet, TagCountedHashMap, TagCountedHashSet:
 			for {
-				cursor, err := it.nextInternal(IndexBlockSize)
+				cursor, err := it.nextInternal(0)
 				if err != nil {
 					if !yield(nil, err) {
 						return

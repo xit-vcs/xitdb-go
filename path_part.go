@@ -332,23 +332,24 @@ func (p LinkedArrayListInit) readSlotPointer(db *Database, isTopLevel bool, writ
 
 	switch slotPtr.Slot.Tag {
 	case TagNone:
-		arrayListStart, err := db.Core.Length()
+		// create an empty tree: a single empty leaf plus a header
+		rootPtr, err := db.writeBTreeNode(BTreeNode{Kind: BTreeKindLeaf, Num: 0})
 		if err != nil {
 			return SlotPointer{}, err
 		}
-		if err := db.Core.SeekTo(arrayListStart); err != nil {
+		headerPtr, err := db.Core.Length()
+		if err != nil {
 			return SlotPointer{}, err
 		}
-		arrayListPtr := arrayListStart + int64(LinkedArrayListHeaderLength)
-		laHeader := LinkedArrayListHeader{Shift: 0, Ptr: arrayListPtr, Size: 0}
-		b := laHeader.ToBytes()
-		if err := db.Core.Write(b[:]); err != nil {
+		if err := db.Core.SeekTo(headerPtr); err != nil {
 			return SlotPointer{}, err
 		}
-		if err := db.Core.Write(make([]byte, LinkedArrayListIndexBlockSize)); err != nil {
+		header := BTreeHeader{RootPtr: rootPtr, Size: 0}
+		hb := header.ToBytes()
+		if err := db.Core.Write(hb[:]); err != nil {
 			return SlotPointer{}, err
 		}
-		nextSlotPtr := SlotPointer{Position: &position, Slot: Slot{Value: arrayListStart, Tag: TagLinkedArrayList}}
+		nextSlotPtr := SlotPointer{Position: &position, Slot: Slot{Value: headerPtr, Tag: TagLinkedArrayList}}
 		if err := db.Core.SeekTo(position); err != nil {
 			return SlotPointer{}, err
 		}
@@ -359,51 +360,35 @@ func (p LinkedArrayListInit) readSlotPointer(db *Database, isTopLevel bool, writ
 		return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr)
 
 	case TagLinkedArrayList:
-		arrayListStart := slotPtr.Slot.Value
-
+		headerPtr := slotPtr.Slot.Value
+		// copy the header into this transaction unless it was made in it, so past
+		// moments still pointing at the old header are unaffected. b-tree nodes are
+		// always appended, so only the header needs copying.
 		if db.TxStart != nil {
-			if arrayListStart < *db.TxStart {
-				if err := db.Core.SeekTo(arrayListStart); err != nil {
+			if headerPtr < *db.TxStart {
+				if err := db.Core.SeekTo(headerPtr); err != nil {
 					return SlotPointer{}, err
 				}
-				var headerBytes [LinkedArrayListHeaderLength]byte
+				var headerBytes [BTreeHeaderLength]byte
 				if err := db.Core.Read(headerBytes[:]); err != nil {
 					return SlotPointer{}, err
 				}
-				header, err := LinkedArrayListHeaderFromBytes(headerBytes[:])
+				newPtr, err := db.Core.Length()
 				if err != nil {
 					return SlotPointer{}, err
 				}
-				if err := db.Core.SeekTo(header.Ptr); err != nil {
+				if err := db.Core.SeekTo(newPtr); err != nil {
 					return SlotPointer{}, err
 				}
-				arrayListIndexBlock := make([]byte, LinkedArrayListIndexBlockSize)
-				if err := db.Core.Read(arrayListIndexBlock); err != nil {
+				if err := db.Core.Write(headerBytes[:]); err != nil {
 					return SlotPointer{}, err
 				}
-				newStart, err := db.Core.Length()
-				if err != nil {
-					return SlotPointer{}, err
-				}
-				if err := db.Core.SeekTo(newStart); err != nil {
-					return SlotPointer{}, err
-				}
-				nextArrayListPtr := newStart + int64(LinkedArrayListHeaderLength)
-				header = header.WithPtr(nextArrayListPtr)
-				hb := header.ToBytes()
-				if err := db.Core.Write(hb[:]); err != nil {
-					return SlotPointer{}, err
-				}
-				if err := db.Core.Write(arrayListIndexBlock); err != nil {
-					return SlotPointer{}, err
-				}
-				arrayListStart = newStart
+				headerPtr = newPtr
 			}
 		} else if db.Header.Tag == TagArrayList {
 			return SlotPointer{}, ErrExpectedTxStart
 		}
-
-		nextSlotPtr := SlotPointer{Position: &position, Slot: Slot{Value: arrayListStart, Tag: TagLinkedArrayList}}
+		nextSlotPtr := SlotPointer{Position: &position, Slot: Slot{Value: headerPtr, Tag: TagLinkedArrayList}}
 		if err := db.Core.SeekTo(position); err != nil {
 			return SlotPointer{}, err
 		}
@@ -434,33 +419,58 @@ func (p LinkedArrayListGet) readSlotPointer(db *Database, isTopLevel bool, write
 	}
 
 	index := p.Index
-	if err := db.Core.SeekTo(slotPtr.Slot.Value); err != nil {
+	headerPtr := slotPtr.Slot.Value
+	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
 	}
-	var headerBytes [LinkedArrayListHeaderLength]byte
+	var headerBytes [BTreeHeaderLength]byte
 	if err := db.Core.Read(headerBytes[:]); err != nil {
 		return SlotPointer{}, err
 	}
-	header, err := LinkedArrayListHeaderFromBytes(headerBytes[:])
+	header, err := BTreeHeaderFromBytes(headerBytes[:])
 	if err != nil {
 		return SlotPointer{}, err
 	}
 	if index >= header.Size || index < -header.Size {
 		return SlotPointer{}, ErrKeyNotFound
 	}
-
-	var key int64
+	var rank int64
 	if index < 0 {
-		key = header.Size - int64(math.Abs(float64(index)))
+		rank = header.Size - int64(math.Abs(float64(index)))
 	} else {
-		key = index
+		rank = index
 	}
-	finalSlotPtr, err := db.readLinkedArrayListSlot(header.Ptr, key, header.Shift, writeMode, isTopLevel)
+
+	if writeMode == ReadOnly {
+		finalSlotPtr, err := db.readBTreeSlot(header.RootPtr, rank)
+		if err != nil {
+			return SlotPointer{}, err
+		}
+		return db.readSlotPointer(writeMode, path, pathI+1, finalSlotPtr)
+	}
+
+	// path-copy down to the value slot so the write is persistent
+	writeSlot, err := db.btreeGetForWrite(header.RootPtr, rank)
 	if err != nil {
 		return SlotPointer{}, err
 	}
-
-	return db.readSlotPointer(writeMode, path, pathI+1, finalSlotPtr.SlotPtr)
+	valuePosition := writeSlot.ValuePosition
+	finalSlotPtr, err := db.readSlotPointer(writeMode, path, pathI+1, SlotPointer{Position: &valuePosition, Slot: writeSlot.Slot})
+	if err != nil {
+		return SlotPointer{}, err
+	}
+	// the header only needs rewriting if the root actually moved
+	if writeSlot.NodePtr != header.RootPtr {
+		if err := db.Core.SeekTo(headerPtr); err != nil {
+			return SlotPointer{}, err
+		}
+		newHeader := BTreeHeader{RootPtr: writeSlot.NodePtr, Size: header.Size}
+		nhb := newHeader.ToBytes()
+		if err := db.Core.Write(nhb[:]); err != nil {
+			return SlotPointer{}, err
+		}
+	}
+	return finalSlotPtr, nil
 }
 
 // LinkedArrayListAppend
@@ -475,33 +485,41 @@ func (p LinkedArrayListAppend) readSlotPointer(db *Database, isTopLevel bool, wr
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
-	nextArrayListStart := slotPtr.Slot.Value
-	if err := db.Core.SeekTo(nextArrayListStart); err != nil {
+	headerPtr := slotPtr.Slot.Value
+	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
 	}
-	var headerBytes [LinkedArrayListHeaderLength]byte
+	var headerBytes [BTreeHeaderLength]byte
 	if err := db.Core.Read(headerBytes[:]); err != nil {
 		return SlotPointer{}, err
 	}
-	origHeader, err := LinkedArrayListHeaderFromBytes(headerBytes[:])
+	header, err := BTreeHeaderFromBytes(headerBytes[:])
 	if err != nil {
 		return SlotPointer{}, err
 	}
 
-	appendResult, err := db.readLinkedArrayListSlotAppend(origHeader, writeMode, isTopLevel)
+	result, err := db.btreeInsert(header.RootPtr, header.Size)
 	if err != nil {
 		return SlotPointer{}, err
 	}
-	finalSlotPtr, err := db.readSlotPointer(writeMode, path, pathI+1, appendResult.SlotPtr.SlotPtr)
+	newRootPtr, err := db.btreeGrowRoot(result)
 	if err != nil {
 		return SlotPointer{}, err
 	}
 
-	if err := db.Core.SeekTo(nextArrayListStart); err != nil {
+	// fill in the value via the rest of the path
+	valuePosition := result.ValuePosition
+	finalSlotPtr, err := db.readSlotPointer(writeMode, path, pathI+1, SlotPointer{Position: &valuePosition, Slot: Slot{}})
+	if err != nil {
 		return SlotPointer{}, err
 	}
-	b := appendResult.Header.ToBytes()
-	if err := db.Core.Write(b[:]); err != nil {
+
+	if err := db.Core.SeekTo(headerPtr); err != nil {
+		return SlotPointer{}, err
+	}
+	newHeader := BTreeHeader{RootPtr: newRootPtr, Size: header.Size + 1}
+	nhb := newHeader.ToBytes()
+	if err := db.Core.Write(nhb[:]); err != nil {
 		return SlotPointer{}, err
 	}
 
@@ -523,33 +541,45 @@ func (p LinkedArrayListSlicePart) readSlotPointer(db *Database, isTopLevel bool,
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
-	nextArrayListStart := slotPtr.Slot.Value
-	if err := db.Core.SeekTo(nextArrayListStart); err != nil {
+	headerPtr := slotPtr.Slot.Value
+	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
 	}
-	var headerBytes [LinkedArrayListHeaderLength]byte
+	var headerBytes [BTreeHeaderLength]byte
 	if err := db.Core.Read(headerBytes[:]); err != nil {
 		return SlotPointer{}, err
 	}
-	origHeader, err := LinkedArrayListHeaderFromBytes(headerBytes[:])
+	header, err := BTreeHeaderFromBytes(headerBytes[:])
 	if err != nil {
 		return SlotPointer{}, err
 	}
 
-	sliceHeader, err := db.readLinkedArrayListSlice(origHeader, p.Offset, p.Size)
+	// bounds-checked without overflow (offset + size could wrap)
+	if p.Offset > header.Size || p.Size > header.Size-p.Offset {
+		return SlotPointer{}, ErrKeyNotFound
+	}
+
+	// slice = drop [0, offset) then keep [0, size) of what's left
+	afterOffset, err := db.btreeSplit(header.RootPtr, p.Offset)
 	if err != nil {
 		return SlotPointer{}, err
 	}
+	sliced, err := db.btreeSplit(afterOffset.Right, p.Size)
+	if err != nil {
+		return SlotPointer{}, err
+	}
+	newRootPtr := sliced.Left
 	finalSlotPtr, err := db.readSlotPointer(writeMode, path, pathI+1, slotPtr)
 	if err != nil {
 		return SlotPointer{}, err
 	}
 
-	if err := db.Core.SeekTo(nextArrayListStart); err != nil {
+	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
 	}
-	b := sliceHeader.ToBytes()
-	if err := db.Core.Write(b[:]); err != nil {
+	newHeader := BTreeHeader{RootPtr: newRootPtr, Size: p.Size}
+	nhb := newHeader.ToBytes()
+	if err := db.Core.Write(nhb[:]); err != nil {
 		return SlotPointer{}, err
 	}
 
@@ -573,16 +603,15 @@ func (p LinkedArrayListConcatPart) readSlotPointer(db *Database, isTopLevel bool
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
-	nextArrayListStart := slotPtr.Slot.Value
-
-	if err := db.Core.SeekTo(nextArrayListStart); err != nil {
+	headerPtr := slotPtr.Slot.Value
+	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
 	}
-	var headerBytesA [LinkedArrayListHeaderLength]byte
+	var headerBytesA [BTreeHeaderLength]byte
 	if err := db.Core.Read(headerBytesA[:]); err != nil {
 		return SlotPointer{}, err
 	}
-	headerA, err := LinkedArrayListHeaderFromBytes(headerBytesA[:])
+	headerA, err := BTreeHeaderFromBytes(headerBytesA[:])
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -590,16 +619,24 @@ func (p LinkedArrayListConcatPart) readSlotPointer(db *Database, isTopLevel bool
 	if err := db.Core.SeekTo(p.List.Value); err != nil {
 		return SlotPointer{}, err
 	}
-	var headerBytesB [LinkedArrayListHeaderLength]byte
+	var headerBytesB [BTreeHeaderLength]byte
 	if err := db.Core.Read(headerBytesB[:]); err != nil {
 		return SlotPointer{}, err
 	}
-	headerB, err := LinkedArrayListHeaderFromBytes(headerBytesB[:])
+	headerB, err := BTreeHeaderFromBytes(headerBytesB[:])
 	if err != nil {
 		return SlotPointer{}, err
 	}
 
-	concatHeader, err := db.readLinkedArrayListConcat(headerA, headerB)
+	// the join result shares subtrees with both operands (and the second operand stays
+	// live), so freeze everything created so far: later in-place mutations will then
+	// copy those nodes instead of overwriting a node that is still referenced elsewhere.
+	txStart, err := db.Core.Length()
+	if err != nil {
+		return SlotPointer{}, err
+	}
+	db.TxStart = &txStart
+	newRootPtr, err := db.btreeJoin(headerA.RootPtr, headerB.RootPtr)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -608,11 +645,12 @@ func (p LinkedArrayListConcatPart) readSlotPointer(db *Database, isTopLevel bool
 		return SlotPointer{}, err
 	}
 
-	if err := db.Core.SeekTo(nextArrayListStart); err != nil {
+	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
 	}
-	b := concatHeader.ToBytes()
-	if err := db.Core.Write(b[:]); err != nil {
+	newHeader := BTreeHeader{RootPtr: newRootPtr, Size: headerA.Size + headerB.Size}
+	nhb := newHeader.ToBytes()
+	if err := db.Core.Write(nhb[:]); err != nil {
 		return SlotPointer{}, err
 	}
 
@@ -633,64 +671,51 @@ func (p LinkedArrayListInsertPart) readSlotPointer(db *Database, isTopLevel bool
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
-	nextArrayListStart := slotPtr.Slot.Value
-	if err := db.Core.SeekTo(nextArrayListStart); err != nil {
+	headerPtr := slotPtr.Slot.Value
+	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
 	}
-	var headerBytes [LinkedArrayListHeaderLength]byte
+	var headerBytes [BTreeHeaderLength]byte
 	if err := db.Core.Read(headerBytes[:]); err != nil {
 		return SlotPointer{}, err
 	}
-	origHeader, err := LinkedArrayListHeaderFromBytes(headerBytes[:])
+	header, err := BTreeHeaderFromBytes(headerBytes[:])
 	if err != nil {
 		return SlotPointer{}, err
 	}
 
 	index := p.Index
-	if index >= origHeader.Size || index < -origHeader.Size {
+	if index >= header.Size || index < -header.Size {
 		return SlotPointer{}, ErrKeyNotFound
 	}
-	var key int64
+	var rank int64
 	if index < 0 {
-		key = origHeader.Size - int64(math.Abs(float64(index)))
+		rank = header.Size - int64(math.Abs(float64(index)))
 	} else {
-		key = index
+		rank = index
 	}
 
-	headerA, err := db.readLinkedArrayListSlice(origHeader, 0, key)
+	result, err := db.btreeInsert(header.RootPtr, rank)
 	if err != nil {
 		return SlotPointer{}, err
 	}
-	headerB, err := db.readLinkedArrayListSlice(origHeader, key, origHeader.Size-key)
-	if err != nil {
-		return SlotPointer{}, err
-	}
-
-	appendResult, err := db.readLinkedArrayListSlotAppend(headerA, writeMode, isTopLevel)
+	newRootPtr, err := db.btreeGrowRoot(result)
 	if err != nil {
 		return SlotPointer{}, err
 	}
 
-	concatHeader, err := db.readLinkedArrayListConcat(appendResult.Header, headerB)
+	valuePosition := result.ValuePosition
+	finalSlotPtr, err := db.readSlotPointer(writeMode, path, pathI+1, SlotPointer{Position: &valuePosition, Slot: Slot{}})
 	if err != nil {
 		return SlotPointer{}, err
 	}
 
-	nextSlotPtr, err := db.readLinkedArrayListSlot(concatHeader.Ptr, key, concatHeader.Shift, ReadOnly, isTopLevel)
-	if err != nil {
+	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
 	}
-
-	finalSlotPtr, err := db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr.SlotPtr)
-	if err != nil {
-		return SlotPointer{}, err
-	}
-
-	if err := db.Core.SeekTo(nextArrayListStart); err != nil {
-		return SlotPointer{}, err
-	}
-	b := concatHeader.ToBytes()
-	if err := db.Core.Write(b[:]); err != nil {
+	newHeader := BTreeHeader{RootPtr: newRootPtr, Size: header.Size + 1}
+	nhb := newHeader.ToBytes()
+	if err := db.Core.Write(nhb[:]); err != nil {
 		return SlotPointer{}, err
 	}
 
@@ -711,54 +736,54 @@ func (p LinkedArrayListRemovePart) readSlotPointer(db *Database, isTopLevel bool
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
-	nextArrayListStart := slotPtr.Slot.Value
-	if err := db.Core.SeekTo(nextArrayListStart); err != nil {
+	headerPtr := slotPtr.Slot.Value
+	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
 	}
-	var headerBytes [LinkedArrayListHeaderLength]byte
+	var headerBytes [BTreeHeaderLength]byte
 	if err := db.Core.Read(headerBytes[:]); err != nil {
 		return SlotPointer{}, err
 	}
-	origHeader, err := LinkedArrayListHeaderFromBytes(headerBytes[:])
+	header, err := BTreeHeaderFromBytes(headerBytes[:])
 	if err != nil {
 		return SlotPointer{}, err
 	}
 
 	index := p.Index
-	if index >= origHeader.Size || index < -origHeader.Size {
+	if index >= header.Size || index < -header.Size {
 		return SlotPointer{}, ErrKeyNotFound
 	}
-	var key int64
+	var rank int64
 	if index < 0 {
-		key = origHeader.Size - int64(math.Abs(float64(index)))
+		rank = header.Size - int64(math.Abs(float64(index)))
 	} else {
-		key = index
+		rank = index
 	}
 
-	headerA, err := db.readLinkedArrayListSlice(origHeader, 0, key)
+	// remove = join the parts before and after the removed element
+	before, err := db.btreeSplit(header.RootPtr, rank)
 	if err != nil {
 		return SlotPointer{}, err
 	}
-	headerB, err := db.readLinkedArrayListSlice(origHeader, key+1, origHeader.Size-(key+1))
+	after, err := db.btreeSplit(before.Right, 1)
 	if err != nil {
 		return SlotPointer{}, err
 	}
-
-	concatHeader, err := db.readLinkedArrayListConcat(headerA, headerB)
+	newRootPtr, err := db.btreeJoin(before.Left, after.Right)
 	if err != nil {
 		return SlotPointer{}, err
 	}
-
 	finalSlotPtr, err := db.readSlotPointer(writeMode, path, pathI+1, slotPtr)
 	if err != nil {
 		return SlotPointer{}, err
 	}
 
-	if err := db.Core.SeekTo(nextArrayListStart); err != nil {
+	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
 	}
-	b := concatHeader.ToBytes()
-	if err := db.Core.Write(b[:]); err != nil {
+	newHeader := BTreeHeader{RootPtr: newRootPtr, Size: header.Size - 1}
+	nhb := newHeader.ToBytes()
+	if err := db.Core.Write(nhb[:]); err != nil {
 		return SlotPointer{}, err
 	}
 

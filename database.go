@@ -16,8 +16,13 @@ const (
 	SlotCount                            = 1 << BitCount
 	Mask                           int64 = SlotCount - 1
 	IndexBlockSize                       = SlotLength * SlotCount
-	LinkedArrayListIndexBlockSize        = LinkedArrayListSlotLength * SlotCount
 	MaxBranchLength                      = 16
+	// b-tree (backs LinkedArrayList): nodes hold up to BTreeSlotCount entries
+	BTreeSlotCount                       = SlotCount
+	BTreeSplitCount                      = (BTreeSlotCount + 1) / 2
+	BTreeNodeHeaderSize                  = 2
+	BTreeLeafBlockSize                   = BTreeNodeHeaderSize + SlotLength*BTreeSlotCount
+	BTreeBranchBlockSize                 = BTreeNodeHeaderSize + (SlotLength+8)*BTreeSlotCount
 )
 
 var (
@@ -159,39 +164,32 @@ func (h TopLevelArrayListHeader) ToBytes() [TopLevelArrayListHeaderLength]byte {
 	return buf
 }
 
-// LinkedArrayListHeader
+// BTreeHeader: a root pointer plus the element count (backs LinkedArrayList)
 
-const LinkedArrayListHeaderLength = 17
+const BTreeHeaderLength = 16
 
-type LinkedArrayListHeader struct {
-	Shift byte
-	Ptr   int64
-	Size  int64
+type BTreeHeader struct {
+	RootPtr int64
+	Size    int64
 }
 
-func (h LinkedArrayListHeader) ToBytes() [LinkedArrayListHeaderLength]byte {
-	var buf [LinkedArrayListHeaderLength]byte
+func (h BTreeHeader) ToBytes() [BTreeHeaderLength]byte {
+	var buf [BTreeHeaderLength]byte
 	binary.BigEndian.PutUint64(buf[0:8], uint64(h.Size))
-	binary.BigEndian.PutUint64(buf[8:16], uint64(h.Ptr))
-	buf[16] = h.Shift & 0b0011_1111
+	binary.BigEndian.PutUint64(buf[8:16], uint64(h.RootPtr))
 	return buf
 }
 
-func LinkedArrayListHeaderFromBytes(b []byte) (LinkedArrayListHeader, error) {
+func BTreeHeaderFromBytes(b []byte) (BTreeHeader, error) {
 	size := int64(binary.BigEndian.Uint64(b[0:8]))
-	ptr := int64(binary.BigEndian.Uint64(b[8:16]))
-	shift := b[16] & 0b0011_1111
+	rootPtr := int64(binary.BigEndian.Uint64(b[8:16]))
 	if size < 0 {
-		return LinkedArrayListHeader{}, ErrExpectedUnsignedLong
+		return BTreeHeader{}, ErrExpectedUnsignedLong
 	}
-	if ptr < 0 {
-		return LinkedArrayListHeader{}, ErrExpectedUnsignedLong
+	if rootPtr < 0 {
+		return BTreeHeader{}, ErrExpectedUnsignedLong
 	}
-	return LinkedArrayListHeader{Shift: shift, Ptr: ptr, Size: size}, nil
-}
-
-func (h LinkedArrayListHeader) WithPtr(ptr int64) LinkedArrayListHeader {
-	return LinkedArrayListHeader{Shift: h.Shift, Ptr: ptr, Size: h.Size}
+	return BTreeHeader{RootPtr: rootPtr, Size: size}, nil
 }
 
 // KeyValuePair
@@ -228,55 +226,63 @@ func KeyValuePairFromBytes(b []byte, hashSize int) KeyValuePair {
 	return KeyValuePair{ValueSlot: valueSlot, KeySlot: keySlot, Hash: hash}
 }
 
-// LinkedArrayListSlot
+// BTreeNode: a leaf holds value slots; a branch holds child slots (.index) plus a
+// per-child u64 subtree count.
 
-const LinkedArrayListSlotLength = 8 + SlotLength
+type BTreeNodeKind byte
 
-type LinkedArrayListSlot struct {
-	Size int64
-	Slot Slot
+const (
+	BTreeKindLeaf   BTreeNodeKind = 0
+	BTreeKindBranch BTreeNodeKind = 1
+)
+
+type BTreeNode struct {
+	Kind     BTreeNodeKind
+	Num      int
+	Values   [BTreeSlotCount]Slot  // leaf
+	Children [BTreeSlotCount]Slot  // branch
+	Counts   [BTreeSlotCount]int64 // branch
 }
 
-func (s LinkedArrayListSlot) WithSize(size int64) LinkedArrayListSlot {
-	return LinkedArrayListSlot{Size: size, Slot: s.Slot}
-}
-
-func (s LinkedArrayListSlot) ToBytes() [LinkedArrayListSlotLength]byte {
-	var buf [LinkedArrayListSlotLength]byte
-	slotBytes := s.Slot.ToBytes()
-	copy(buf[0:SlotLength], slotBytes[:])
-	binary.BigEndian.PutUint64(buf[SlotLength:], uint64(s.Size))
-	return buf
-}
-
-func LinkedArrayListSlotFromBytes(b []byte) (LinkedArrayListSlot, error) {
-	var slotBytes [SlotLength]byte
-	copy(slotBytes[:], b[0:SlotLength])
-	slot := SlotFromBytes(slotBytes)
-	size := int64(binary.BigEndian.Uint64(b[SlotLength:]))
-	if size < 0 {
-		return LinkedArrayListSlot{}, ErrExpectedUnsignedLong
+func (n *BTreeNode) SubtreeCount() int64 {
+	if n.Kind == BTreeKindLeaf {
+		return int64(n.Num)
 	}
-	return LinkedArrayListSlot{Size: size, Slot: slot}, nil
+	var total int64
+	for i := 0; i < n.Num; i++ {
+		total += n.Counts[i]
+	}
+	return total
 }
 
-// LinkedArrayListSlotPointer
-
-type LinkedArrayListSlotPointer struct {
-	SlotPtr   SlotPointer
-	LeafCount int64
+// a node pointer plus the element count of its subtree (the right sibling of a split)
+type BTreeNodeRef struct {
+	NodePtr int64
+	Count   int64
 }
 
-func (p LinkedArrayListSlotPointer) WithSlotPointer(sp SlotPointer) LinkedArrayListSlotPointer {
-	return LinkedArrayListSlotPointer{SlotPtr: sp, LeafCount: p.LeafCount}
+type BTreeInsertResult struct {
+	NodePtr       int64
+	Count         int64
+	ValuePosition int64
+	Split         *BTreeNodeRef
 }
 
-// LinkedArrayListBlockInfo
+type BTreeWriteSlot struct {
+	NodePtr       int64
+	ValuePosition int64
+	Slot          Slot
+}
 
-type LinkedArrayListBlockInfo struct {
-	Block      [SlotCount]LinkedArrayListSlot
-	I          byte
-	ParentSlot LinkedArrayListSlot
+type BTreeJoinResult struct {
+	NodePtr int64
+	Count   int64
+	Split   *BTreeNodeRef
+}
+
+type BTreeSplitResult struct {
+	Left  int64
+	Right int64
 }
 
 // HashMapGetTarget
@@ -309,13 +315,6 @@ type HashMapGetResult struct {
 type ArrayListAppendResult struct {
 	Header  ArrayListHeader
 	SlotPtr SlotPointer
-}
-
-// LinkedArrayListAppendResult
-
-type LinkedArrayListAppendResult struct {
-	Header  LinkedArrayListHeader
-	SlotPtr LinkedArrayListSlotPointer
 }
 
 // ContextFunction
@@ -1162,674 +1161,602 @@ func (db *Database) readArrayListSlice(header ArrayListHeader, size int64) (Arra
 
 // LinkedArrayList methods
 
-func (db *Database) readLinkedArrayListSlotAppend(header LinkedArrayListHeader, writeMode WriteMode, isTopLevel bool) (LinkedArrayListAppendResult, error) {
-	ptr := header.Ptr
-	key := header.Size
-	shift := header.Shift
+// linked_array_list (backed by a count-augmented B-tree)
 
-	slotPtr, err := db.readLinkedArrayListSlot(ptr, key, shift, writeMode, isTopLevel)
+func (db *Database) readBTreeNode(ptr int64) (BTreeNode, error) {
+	if err := db.Core.SeekTo(ptr); err != nil {
+		return BTreeNode{}, err
+	}
+	var headerBytes [BTreeNodeHeaderSize]byte
+	if err := db.Core.Read(headerBytes[:]); err != nil {
+		return BTreeNode{}, err
+	}
+	kindInt := headerBytes[0]
+	if kindInt > byte(BTreeKindBranch) {
+		return BTreeNode{}, ErrInvalidBTreeNodeKind
+	}
+	kind := BTreeNodeKind(kindInt)
+	num := int(headerBytes[1])
+	if num > BTreeSlotCount {
+		return BTreeNode{}, ErrInvalidBTreeNode
+	}
+	node := BTreeNode{Kind: kind, Num: num}
+	switch kind {
+	case BTreeKindLeaf:
+		body := make([]byte, SlotLength*BTreeSlotCount)
+		if err := db.Core.Read(body); err != nil {
+			return BTreeNode{}, err
+		}
+		for i := 0; i < BTreeSlotCount; i++ {
+			var sb [SlotLength]byte
+			copy(sb[:], body[i*SlotLength:i*SlotLength+SlotLength])
+			node.Values[i] = SlotFromBytes(sb)
+		}
+	case BTreeKindBranch:
+		body := make([]byte, (SlotLength+8)*BTreeSlotCount)
+		if err := db.Core.Read(body); err != nil {
+			return BTreeNode{}, err
+		}
+		for i := 0; i < BTreeSlotCount; i++ {
+			var sb [SlotLength]byte
+			copy(sb[:], body[i*SlotLength:i*SlotLength+SlotLength])
+			node.Children[i] = SlotFromBytes(sb)
+		}
+		countsOffset := SlotLength * BTreeSlotCount
+		for i := 0; i < BTreeSlotCount; i++ {
+			node.Counts[i] = int64(binary.BigEndian.Uint64(body[countsOffset+i*8 : countsOffset+i*8+8]))
+		}
+	}
+	return node, nil
+}
+
+// always writes the node as a block at ptr. b-tree mutations are persistent: every
+// node on the path from the root is rewritten, while untouched subtrees are shared by
+// pointer.
+func (db *Database) writeBTreeNodeAt(node BTreeNode, ptr int64) error {
+	if err := db.Core.SeekTo(ptr); err != nil {
+		return err
+	}
+	var bodySize int
+	if node.Kind == BTreeKindLeaf {
+		bodySize = BTreeLeafBlockSize
+	} else {
+		bodySize = BTreeBranchBlockSize
+	}
+	buf := make([]byte, bodySize)
+	buf[0] = byte(node.Kind)
+	buf[1] = byte(node.Num)
+	off := BTreeNodeHeaderSize
+	switch node.Kind {
+	case BTreeKindLeaf:
+		for i := 0; i < BTreeSlotCount; i++ {
+			sb := node.Values[i].ToBytes()
+			copy(buf[off:], sb[:])
+			off += SlotLength
+		}
+	case BTreeKindBranch:
+		for i := 0; i < BTreeSlotCount; i++ {
+			sb := node.Children[i].ToBytes()
+			copy(buf[off:], sb[:])
+			off += SlotLength
+		}
+		for i := 0; i < BTreeSlotCount; i++ {
+			binary.BigEndian.PutUint64(buf[off:], uint64(node.Counts[i]))
+			off += 8
+		}
+	}
+	return db.Core.Write(buf)
+}
+
+// appends the node as a fresh block and returns its position
+func (db *Database) writeBTreeNode(node BTreeNode) (int64, error) {
+	ptr, err := db.Core.Length()
 	if err != nil {
-		if err == ErrNoAvailableSlots {
-			// root overflow
-			nextPtr, err := db.Core.Length()
-			if err != nil {
-				return LinkedArrayListAppendResult{}, err
-			}
-			if err := db.Core.SeekTo(nextPtr); err != nil {
-				return LinkedArrayListAppendResult{}, err
-			}
-			if err := db.Core.Write(make([]byte, LinkedArrayListIndexBlockSize)); err != nil {
-				return LinkedArrayListAppendResult{}, err
-			}
-			if err := db.Core.SeekTo(nextPtr); err != nil {
-				return LinkedArrayListAppendResult{}, err
-			}
-			laSlot := LinkedArrayListSlot{Size: header.Size, Slot: Slot{Value: ptr, Tag: TagIndex, Full: true}}
-			lab := laSlot.ToBytes()
-			if err := db.Core.Write(lab[:]); err != nil {
-				return LinkedArrayListAppendResult{}, err
-			}
-			ptr = nextPtr
-			shift++
-			slotPtr, err = db.readLinkedArrayListSlot(ptr, key, shift, writeMode, isTopLevel)
-			if err != nil {
-				return LinkedArrayListAppendResult{}, err
-			}
-		} else {
-			return LinkedArrayListAppendResult{}, err
-		}
+		return 0, err
 	}
-
-	// newly-appended slots must have full set to true
-	newSlot := Slot{Value: 0, Tag: TagNone, Full: true}
-	slotPtr = slotPtr.WithSlotPointer(slotPtr.SlotPtr.WithSlot(newSlot))
-	if slotPtr.SlotPtr.Position == nil {
-		return LinkedArrayListAppendResult{}, ErrCursorNotWriteable
+	if err := db.writeBTreeNodeAt(node, ptr); err != nil {
+		return 0, err
 	}
-	position := *slotPtr.SlotPtr.Position
-	if err := db.Core.SeekTo(position); err != nil {
-		return LinkedArrayListAppendResult{}, err
-	}
-	laSlot := LinkedArrayListSlot{Size: 0, Slot: newSlot}
-	lab := laSlot.ToBytes()
-	if err := db.Core.Write(lab[:]); err != nil {
-		return LinkedArrayListAppendResult{}, err
-	}
-	if header.Size < SlotCount && shift > 0 {
-		return LinkedArrayListAppendResult{}, ErrMustSetNewSlotsToFull
-	}
-
-	return LinkedArrayListAppendResult{
-		Header:  LinkedArrayListHeader{Shift: shift, Ptr: ptr, Size: header.Size + 1},
-		SlotPtr: slotPtr,
-	}, nil
+	return ptr, nil
 }
 
-func blockLeafCount(block [SlotCount]LinkedArrayListSlot, shift byte, i byte) int64 {
-	var n int64
-	if shift == 0 {
-		for blockI := 0; blockI < SlotCount; blockI++ {
-			if !block[blockI].Slot.Empty() || byte(blockI) == i {
-				n++
-			}
-		}
-	} else {
-		for _, blockSlot := range block {
-			n += blockSlot.Size
-		}
+// a node is safe to mutate in place when it was created in the current transaction
+// (offset >= TxStart), since no committed moment and no pre-concat sharing can
+// reference it. concat advances TxStart (an implicit freeze) precisely so its shared
+// subtrees fall below it here. for an ephemeral (non-array-list) top level there is no
+// transaction, so everything is mutable in place until a concat first sets TxStart.
+func (db *Database) btreeReusable(ptr int64) bool {
+	if db.TxStart != nil {
+		return ptr >= *db.TxStart
 	}
-	return n
+	return db.Header.Tag != TagArrayList
 }
 
-func slotLeafCount(slot LinkedArrayListSlot, shift byte) int64 {
-	if shift == 0 {
-		if slot.Slot.Empty() {
-			return 0
+// write a new version of a node, reusing oldPtr's position in place if that node
+// belongs to this transaction, otherwise appending a copy
+func (db *Database) btreeWriteNode(node BTreeNode, oldPtr int64) (int64, error) {
+	if db.btreeReusable(oldPtr) {
+		if err := db.writeBTreeNodeAt(node, oldPtr); err != nil {
+			return 0, err
 		}
-		return 1
+		return oldPtr, nil
 	}
-	return slot.Size
+	return db.writeBTreeNode(node)
 }
 
-type keyAndIndex struct {
-	key   int64
-	index byte
+func (db *Database) btreeNewRoot() (int64, error) {
+	return db.writeBTreeNode(BTreeNode{Kind: BTreeKindLeaf, Num: 0})
 }
 
-func keyAndIndexForLinkedArrayList(slotBlock [SlotCount]LinkedArrayListSlot, key int64, shift byte) *keyAndIndex {
-	nextKey := key
-	var i byte = 0
-	var maxLeafCount int64
-	if shift == 0 {
-		maxLeafCount = 1
-	} else {
-		maxLeafCount = int64(math.Pow(float64(SlotCount), float64(shift)))
-	}
-
+// descend to the value slot at the given rank (0-based), returning a pointer to it (its
+// file position and current slot).
+func (db *Database) readBTreeSlot(rootPtr, rank int64) (SlotPointer, error) {
+	nodePtr := rootPtr
+	rem := rank
 	for {
-		slc := slotLeafCount(slotBlock[i], shift)
-		if nextKey == slc {
-			if slc == maxLeafCount || slotBlock[i].Slot.Full {
-				if i < SlotCount-1 {
-					nextKey -= slc
-					i++
-				} else {
-					return nil
-				}
-			}
-			break
-		} else if nextKey < slc {
-			break
-		} else if i < SlotCount-1 {
-			nextKey -= slc
+		node, err := db.readBTreeNode(nodePtr)
+		if err != nil {
+			return SlotPointer{}, err
+		}
+		if node.Kind == BTreeKindLeaf {
+			position := nodePtr + BTreeNodeHeaderSize + rem*SlotLength
+			return SlotPointer{Position: &position, Slot: node.Values[rem]}, nil
+		}
+		i := 0
+		for i+1 < node.Num && rem >= node.Counts[i] {
+			rem -= node.Counts[i]
 			i++
+		}
+		nodePtr = node.Children[i].Value
+	}
+}
+
+// insert a placeholder slot at `rank` within the subtree at nodePtr, writing new nodes
+// along the path. the caller fills in the value at the returned ValuePosition.
+func (db *Database) btreeInsert(nodePtr, rank int64) (BTreeInsertResult, error) {
+	node, err := db.readBTreeNode(nodePtr)
+	if err != nil {
+		return BTreeInsertResult{}, err
+	}
+	switch node.Kind {
+	case BTreeKindLeaf:
+		// build the entries with a placeholder spliced in at `rank`. the placeholder is
+		// a NONE slot marked full so that, if the caller never writes a value (e.g.
+		// appendCursor), iteration still counts it as an element rather than skipping it
+		// as padding.
+		r := int(rank)
+		vals := make([]Slot, 0, BTreeSlotCount+1)
+		vals = append(vals, node.Values[:r]...)
+		vals = append(vals, Slot{Value: 0, Tag: TagNone, Full: true})
+		vals = append(vals, node.Values[r:node.Num]...)
+		total := node.Num + 1
+
+		if total <= BTreeSlotCount {
+			leaf := BTreeNode{Kind: BTreeKindLeaf, Num: total}
+			copy(leaf.Values[:total], vals[:total])
+			ptr, err := db.btreeWriteNode(leaf, nodePtr)
+			if err != nil {
+				return BTreeInsertResult{}, err
+			}
+			return BTreeInsertResult{NodePtr: ptr, Count: int64(total), ValuePosition: ptr + BTreeNodeHeaderSize + int64(r)*SlotLength}, nil
+		}
+
+		// overflow: split into two leaves (reuse this node for the left half)
+		leftN := BTreeSplitCount
+		rightN := total - leftN
+		left := BTreeNode{Kind: BTreeKindLeaf, Num: leftN}
+		copy(left.Values[:leftN], vals[:leftN])
+		right := BTreeNode{Kind: BTreeKindLeaf, Num: rightN}
+		copy(right.Values[:rightN], vals[leftN:total])
+		leftPtr, err := db.btreeWriteNode(left, nodePtr)
+		if err != nil {
+			return BTreeInsertResult{}, err
+		}
+		rightPtr, err := db.writeBTreeNode(right)
+		if err != nil {
+			return BTreeInsertResult{}, err
+		}
+		var valuePosition int64
+		if r < leftN {
+			valuePosition = leftPtr + BTreeNodeHeaderSize + int64(r)*SlotLength
 		} else {
-			return nil
+			valuePosition = rightPtr + BTreeNodeHeaderSize + int64(r-leftN)*SlotLength
 		}
-	}
-	return &keyAndIndex{key: nextKey, index: i}
-}
-
-func (db *Database) readLinkedArrayListSlot(indexPos int64, key int64, shift byte, writeMode WriteMode, isTopLevel bool) (LinkedArrayListSlotPointer, error) {
-	if shift >= MaxBranchLength {
-		return LinkedArrayListSlotPointer{}, ErrMaxShiftExceeded
-	}
-
-	var slotBlock [SlotCount]LinkedArrayListSlot
-	if err := db.Core.SeekTo(indexPos); err != nil {
-		return LinkedArrayListSlotPointer{}, err
-	}
-	indexBlockBytes := make([]byte, LinkedArrayListIndexBlockSize)
-	if err := db.Core.Read(indexBlockBytes); err != nil {
-		return LinkedArrayListSlotPointer{}, err
-	}
-	for j := 0; j < SlotCount; j++ {
-		s, err := LinkedArrayListSlotFromBytes(indexBlockBytes[j*LinkedArrayListSlotLength : (j+1)*LinkedArrayListSlotLength])
+		return BTreeInsertResult{NodePtr: leftPtr, Count: int64(leftN), ValuePosition: valuePosition, Split: &BTreeNodeRef{NodePtr: rightPtr, Count: int64(rightN)}}, nil
+	case BTreeKindBranch:
+		// pick the child that contains `rank`
+		i := 0
+		rem := rank
+		for i+1 < node.Num && rem > node.Counts[i] {
+			rem -= node.Counts[i]
+			i++
+		}
+		child, err := db.btreeInsert(node.Children[i].Value, rem)
 		if err != nil {
-			return LinkedArrayListSlotPointer{}, err
+			return BTreeInsertResult{}, err
 		}
-		slotBlock[j] = s
-	}
 
-	ki := keyAndIndexForLinkedArrayList(slotBlock, key, shift)
-	if ki == nil {
-		return LinkedArrayListSlotPointer{}, ErrNoAvailableSlots
-	}
-	nextKey := ki.key
-	i := ki.index
-	slot := slotBlock[i]
-	slotPos := indexPos + int64(LinkedArrayListSlotLength)*int64(i)
+		// rebuild this branch with the (possibly split) child
+		children := make([]Slot, node.Num, BTreeSlotCount+1)
+		counts := make([]int64, node.Num, BTreeSlotCount+1)
+		copy(children, node.Children[:node.Num])
+		copy(counts, node.Counts[:node.Num])
+		children[i] = Slot{Value: child.NodePtr, Tag: TagIndex}
+		counts[i] = child.Count
+		total := node.Num
+		if child.Split != nil {
+			children = children[:node.Num+1]
+			counts = counts[:node.Num+1]
+			for j := node.Num; j > i+1; j-- {
+				children[j] = children[j-1]
+				counts[j] = counts[j-1]
+			}
+			children[i+1] = Slot{Value: child.Split.NodePtr, Tag: TagIndex}
+			counts[i+1] = child.Split.Count
+			total = node.Num + 1
+		}
 
-	if shift == 0 {
-		leafCount := blockLeafCount(slotBlock, shift, i)
-		return LinkedArrayListSlotPointer{
-			SlotPtr:   SlotPointer{Position: &slotPos, Slot: slot.Slot},
-			LeafCount: leafCount,
-		}, nil
-	}
-
-	ptr := slot.Slot.Value
-
-	switch slot.Slot.Tag {
-	case TagNone:
-		switch writeMode {
-		case ReadOnly:
-			return LinkedArrayListSlotPointer{}, ErrKeyNotFound
-		case ReadWrite:
-			nextIndexPos, err := db.Core.Length()
+		if total <= BTreeSlotCount {
+			branch := BTreeNode{Kind: BTreeKindBranch, Num: total}
+			copy(branch.Children[:total], children[:total])
+			copy(branch.Counts[:total], counts[:total])
+			ptr, err := db.btreeWriteNode(branch, nodePtr)
 			if err != nil {
-				return LinkedArrayListSlotPointer{}, err
+				return BTreeInsertResult{}, err
 			}
-			if err := db.Core.SeekTo(nextIndexPos); err != nil {
-				return LinkedArrayListSlotPointer{}, err
-			}
-			if err := db.Core.Write(make([]byte, LinkedArrayListIndexBlockSize)); err != nil {
-				return LinkedArrayListSlotPointer{}, err
-			}
-			nextSlotPtr, err := db.readLinkedArrayListSlot(nextIndexPos, nextKey, shift-1, writeMode, isTopLevel)
+			return BTreeInsertResult{NodePtr: ptr, Count: branch.SubtreeCount(), ValuePosition: child.ValuePosition}, nil
+		}
+
+		// overflow: split into two branches (reuse this node for the left half)
+		leftN := BTreeSplitCount
+		rightN := total - leftN
+		left := BTreeNode{Kind: BTreeKindBranch, Num: leftN}
+		copy(left.Children[:leftN], children[:leftN])
+		copy(left.Counts[:leftN], counts[:leftN])
+		right := BTreeNode{Kind: BTreeKindBranch, Num: rightN}
+		copy(right.Children[:rightN], children[leftN:total])
+		copy(right.Counts[:rightN], counts[leftN:total])
+		leftPtr, err := db.btreeWriteNode(left, nodePtr)
+		if err != nil {
+			return BTreeInsertResult{}, err
+		}
+		rightPtr, err := db.writeBTreeNode(right)
+		if err != nil {
+			return BTreeInsertResult{}, err
+		}
+		return BTreeInsertResult{NodePtr: leftPtr, Count: left.SubtreeCount(), ValuePosition: child.ValuePosition, Split: &BTreeNodeRef{NodePtr: rightPtr, Count: right.SubtreeCount()}}, nil
+	}
+	return BTreeInsertResult{}, ErrUnreachable
+}
+
+// turn an insert result into a root pointer, growing the tree a level if the old root
+// split (shares the root-building logic with btreeMakeRoot)
+func (db *Database) btreeGrowRoot(result BTreeInsertResult) (int64, error) {
+	return db.btreeMakeRoot(BTreeJoinResult{NodePtr: result.NodePtr, Count: result.Count, Split: result.Split})
+}
+
+// descend to the value slot at `rank` for writing, copy-on-writing only the nodes that
+// belong to a past transaction. the element count is unchanged, so when the whole path
+// is already this-transaction nothing is rewritten and the caller writes straight into
+// the existing leaf.
+func (db *Database) btreeGetForWrite(nodePtr, rank int64) (BTreeWriteSlot, error) {
+	node, err := db.readBTreeNode(nodePtr)
+	if err != nil {
+		return BTreeWriteSlot{}, err
+	}
+	if node.Kind == BTreeKindLeaf {
+		newPtr := nodePtr
+		if !db.btreeReusable(nodePtr) {
+			newPtr, err = db.writeBTreeNode(node)
 			if err != nil {
-				return LinkedArrayListSlotPointer{}, err
-			}
-			slotBlock[i] = slotBlock[i].WithSize(nextSlotPtr.LeafCount)
-			leafCount := blockLeafCount(slotBlock, shift, i)
-			if err := db.Core.SeekTo(slotPos); err != nil {
-				return LinkedArrayListSlotPointer{}, err
-			}
-			writeSlot := LinkedArrayListSlot{Size: nextSlotPtr.LeafCount, Slot: Slot{Value: nextIndexPos, Tag: TagIndex}}
-			wsb := writeSlot.ToBytes()
-			if err := db.Core.Write(wsb[:]); err != nil {
-				return LinkedArrayListSlotPointer{}, err
-			}
-			return LinkedArrayListSlotPointer{SlotPtr: nextSlotPtr.SlotPtr, LeafCount: leafCount}, nil
-		}
-	case TagIndex:
-		nextPtr := ptr
-		if writeMode == ReadWrite && !isTopLevel {
-			if db.TxStart != nil {
-				if nextPtr < *db.TxStart {
-					if err := db.Core.SeekTo(ptr); err != nil {
-						return LinkedArrayListSlotPointer{}, err
-					}
-					indexBlock := make([]byte, LinkedArrayListIndexBlockSize)
-					if err := db.Core.Read(indexBlock); err != nil {
-						return LinkedArrayListSlotPointer{}, err
-					}
-					var err error
-					nextPtr, err = db.Core.Length()
-					if err != nil {
-						return LinkedArrayListSlotPointer{}, err
-					}
-					if err := db.Core.SeekTo(nextPtr); err != nil {
-						return LinkedArrayListSlotPointer{}, err
-					}
-					if err := db.Core.Write(indexBlock); err != nil {
-						return LinkedArrayListSlotPointer{}, err
-					}
-				}
-			} else if db.Header.Tag == TagArrayList {
-				return LinkedArrayListSlotPointer{}, ErrExpectedTxStart
+				return BTreeWriteSlot{}, err
 			}
 		}
+		return BTreeWriteSlot{NodePtr: newPtr, ValuePosition: newPtr + BTreeNodeHeaderSize + rank*SlotLength, Slot: node.Values[rank]}, nil
+	}
+	i := 0
+	rem := rank
+	for i+1 < node.Num && rem >= node.Counts[i] {
+		rem -= node.Counts[i]
+		i++
+	}
+	childPtr := node.Children[i].Value
+	child, err := db.btreeGetForWrite(childPtr, rem)
+	if err != nil {
+		return BTreeWriteSlot{}, err
+	}
+	// if the child stayed put, this branch is unchanged too
+	if child.NodePtr == childPtr {
+		return BTreeWriteSlot{NodePtr: nodePtr, ValuePosition: child.ValuePosition, Slot: child.Slot}, nil
+	}
+	node.Children[i] = Slot{Value: child.NodePtr, Tag: TagIndex}
+	newPtr, err := db.btreeWriteNode(node, nodePtr)
+	if err != nil {
+		return BTreeWriteSlot{}, err
+	}
+	return BTreeWriteSlot{NodePtr: newPtr, ValuePosition: child.ValuePosition, Slot: child.Slot}, nil
+}
 
-		nextSlotPtr, err := db.readLinkedArrayListSlot(nextPtr, nextKey, shift-1, writeMode, isTopLevel)
+// height of a tree = number of branch levels above the leaves
+func (db *Database) btreeHeight(rootPtr int64) (int, error) {
+	ptr := rootPtr
+	height := 0
+	for {
+		node, err := db.readBTreeNode(ptr)
 		if err != nil {
-			return LinkedArrayListSlotPointer{}, err
+			return 0, err
 		}
-
-		slotBlock[i] = slotBlock[i].WithSize(nextSlotPtr.LeafCount)
-		leafCount := blockLeafCount(slotBlock, shift, i)
-
-		if writeMode == ReadWrite && !isTopLevel {
-			if err := db.Core.SeekTo(slotPos); err != nil {
-				return LinkedArrayListSlotPointer{}, err
-			}
-			writeSlot := LinkedArrayListSlot{Size: nextSlotPtr.LeafCount, Slot: Slot{Value: nextPtr, Tag: TagIndex}}
-			wsb := writeSlot.ToBytes()
-			if err := db.Core.Write(wsb[:]); err != nil {
-				return LinkedArrayListSlotPointer{}, err
-			}
+		if node.Kind == BTreeKindLeaf {
+			return height, nil
 		}
-
-		return LinkedArrayListSlotPointer{SlotPtr: nextSlotPtr.SlotPtr, LeafCount: leafCount}, nil
-	default:
-		return LinkedArrayListSlotPointer{}, ErrUnexpectedTag
+		height++
+		ptr = node.Children[0].Value
 	}
-
-	return LinkedArrayListSlotPointer{}, ErrUnreachable
 }
 
-func (db *Database) readLinkedArrayListBlocks(indexPos int64, key int64, shift byte, blocks *[]LinkedArrayListBlockInfo) error {
-	var slotBlock [SlotCount]LinkedArrayListSlot
-	if err := db.Core.SeekTo(indexPos); err != nil {
-		return err
+func (db *Database) btreeMakeRoot(result BTreeJoinResult) (int64, error) {
+	if result.Split != nil {
+		root := BTreeNode{Kind: BTreeKindBranch, Num: 2}
+		root.Children[0] = Slot{Value: result.NodePtr, Tag: TagIndex}
+		root.Children[1] = Slot{Value: result.Split.NodePtr, Tag: TagIndex}
+		root.Counts[0] = result.Count
+		root.Counts[1] = result.Split.Count
+		return db.writeBTreeNode(root)
 	}
-	indexBlockBytes := make([]byte, LinkedArrayListIndexBlockSize)
-	if err := db.Core.Read(indexBlockBytes); err != nil {
-		return err
-	}
-	for j := 0; j < SlotCount; j++ {
-		s, err := LinkedArrayListSlotFromBytes(indexBlockBytes[j*LinkedArrayListSlotLength : (j+1)*LinkedArrayListSlotLength])
+	return result.NodePtr, nil
+}
+
+// write `vals` as one leaf, or split into two balanced leaves if it exceeds the node
+// capacity
+func (db *Database) btreeAssembleLeaf(vals []Slot, total int) (BTreeJoinResult, error) {
+	if total <= BTreeSlotCount {
+		leaf := BTreeNode{Kind: BTreeKindLeaf, Num: total}
+		copy(leaf.Values[:total], vals[:total])
+		ptr, err := db.writeBTreeNode(leaf)
 		if err != nil {
-			return err
+			return BTreeJoinResult{}, err
 		}
-		slotBlock[j] = s
+		return BTreeJoinResult{NodePtr: ptr, Count: int64(total)}, nil
 	}
-
-	ki := keyAndIndexForLinkedArrayList(slotBlock, key, shift)
-	if ki == nil {
-		return ErrNoAvailableSlots
+	leftN := total / 2
+	left := BTreeNode{Kind: BTreeKindLeaf, Num: leftN}
+	copy(left.Values[:leftN], vals[:leftN])
+	right := BTreeNode{Kind: BTreeKindLeaf, Num: total - leftN}
+	copy(right.Values[:total-leftN], vals[leftN:total])
+	leftPtr, err := db.writeBTreeNode(left)
+	if err != nil {
+		return BTreeJoinResult{}, err
 	}
-	nextKey := ki.key
-	i := ki.index
-	leafCount := blockLeafCount(slotBlock, shift, i)
-
-	*blocks = append(*blocks, LinkedArrayListBlockInfo{
-		Block:      slotBlock,
-		I:          i,
-		ParentSlot: LinkedArrayListSlot{Size: leafCount, Slot: Slot{Value: indexPos, Tag: TagIndex}},
-	})
-
-	if shift == 0 {
-		return nil
+	rightPtr, err := db.writeBTreeNode(right)
+	if err != nil {
+		return BTreeJoinResult{}, err
 	}
-
-	slot := slotBlock[i]
-	switch slot.Slot.Tag {
-	case TagNone:
-		return ErrEmptySlot
-	case TagIndex:
-		return db.readLinkedArrayListBlocks(slot.Slot.Value, nextKey, shift-1, blocks)
-	default:
-		return ErrUnexpectedTag
-	}
+	return BTreeJoinResult{NodePtr: leftPtr, Count: int64(leftN), Split: &BTreeNodeRef{NodePtr: rightPtr, Count: int64(total - leftN)}}, nil
 }
 
-func populateArray(arr *[SlotCount]LinkedArrayListSlot) {
-	for i := range arr {
-		arr[i] = LinkedArrayListSlot{Size: 0, Slot: Slot{}}
+// write `children`/`counts` as one branch, or split into two balanced branches
+func (db *Database) btreeAssembleBranch(children []Slot, counts []int64, total int) (BTreeJoinResult, error) {
+	if total <= BTreeSlotCount {
+		branch := BTreeNode{Kind: BTreeKindBranch, Num: total}
+		copy(branch.Children[:total], children[:total])
+		copy(branch.Counts[:total], counts[:total])
+		ptr, err := db.writeBTreeNode(branch)
+		if err != nil {
+			return BTreeJoinResult{}, err
+		}
+		return BTreeJoinResult{NodePtr: ptr, Count: branch.SubtreeCount()}, nil
 	}
+	leftN := total / 2
+	left := BTreeNode{Kind: BTreeKindBranch, Num: leftN}
+	copy(left.Children[:leftN], children[:leftN])
+	copy(left.Counts[:leftN], counts[:leftN])
+	right := BTreeNode{Kind: BTreeKindBranch, Num: total - leftN}
+	copy(right.Children[:total-leftN], children[leftN:total])
+	copy(right.Counts[:total-leftN], counts[leftN:total])
+	leftPtr, err := db.writeBTreeNode(left)
+	if err != nil {
+		return BTreeJoinResult{}, err
+	}
+	rightPtr, err := db.writeBTreeNode(right)
+	if err != nil {
+		return BTreeJoinResult{}, err
+	}
+	return BTreeJoinResult{NodePtr: leftPtr, Count: left.SubtreeCount(), Split: &BTreeNodeRef{NodePtr: rightPtr, Count: right.SubtreeCount()}}, nil
 }
 
-func (db *Database) readLinkedArrayListSlice(header LinkedArrayListHeader, offset int64, size int64) (LinkedArrayListHeader, error) {
-	if offset+size > header.Size {
-		return LinkedArrayListHeader{}, ErrKeyNotFound
+// merge two nodes of equal height (a precedes b) into one or two nodes
+func (db *Database) btreeMergeNodes(a, b BTreeNode) (BTreeJoinResult, error) {
+	if a.Kind == BTreeKindLeaf {
+		vals := make([]Slot, 0, 2*BTreeSlotCount)
+		vals = append(vals, a.Values[:a.Num]...)
+		vals = append(vals, b.Values[:b.Num]...)
+		return db.btreeAssembleLeaf(vals, a.Num+b.Num)
 	}
+	children := make([]Slot, 0, 2*BTreeSlotCount)
+	counts := make([]int64, 0, 2*BTreeSlotCount)
+	children = append(children, a.Children[:a.Num]...)
+	children = append(children, b.Children[:b.Num]...)
+	counts = append(counts, a.Counts[:a.Num]...)
+	counts = append(counts, b.Counts[:b.Num]...)
+	return db.btreeAssembleBranch(children, counts, a.Num+b.Num)
+}
 
-	// read the list's left blocks
-	var leftBlocks []LinkedArrayListBlockInfo
-	if err := db.readLinkedArrayListBlocks(header.Ptr, offset, header.Shift, &leftBlocks); err != nil {
-		return LinkedArrayListHeader{}, err
+// join b (shorter) into the rightmost spine of a (taller), at height hb
+func (db *Database) btreeJoinRight(aPtr int64, ha int, bPtr int64, hb int) (BTreeJoinResult, error) {
+	a, err := db.readBTreeNode(aPtr)
+	if err != nil {
+		return BTreeJoinResult{}, err
 	}
-
-	// read the list's right blocks
-	var rightBlocks []LinkedArrayListBlockInfo
-	var rightKey int64
-	if offset+size == 0 {
-		rightKey = 0
+	last := a.Num - 1
+	var sub BTreeJoinResult
+	if ha-1 == hb {
+		lastChild, lerr := db.readBTreeNode(a.Children[last].Value)
+		if lerr != nil {
+			return BTreeJoinResult{}, lerr
+		}
+		bNode, berr := db.readBTreeNode(bPtr)
+		if berr != nil {
+			return BTreeJoinResult{}, berr
+		}
+		sub, err = db.btreeMergeNodes(lastChild, bNode)
 	} else {
-		rightKey = offset + size - 1
+		sub, err = db.btreeJoinRight(a.Children[last].Value, ha-1, bPtr, hb)
 	}
-	if err := db.readLinkedArrayListBlocks(header.Ptr, rightKey, header.Shift, &rightBlocks); err != nil {
-		return LinkedArrayListHeader{}, err
-	}
-
-	blockCount := len(leftBlocks)
-	nextSlots := [2]*LinkedArrayListSlot{nil, nil}
-	var nextShift byte = 0
-
-	for i := 0; i < blockCount; i++ {
-		isLeafNode := nextSlots[0] == nil
-
-		leftBlock := leftBlocks[blockCount-i-1]
-		rightBlock := rightBlocks[blockCount-i-1]
-		origBlockInfos := [2]LinkedArrayListBlockInfo{leftBlock, rightBlock}
-		var nextBlocks [2]*[SlotCount]LinkedArrayListSlot
-
-		if leftBlock.ParentSlot.Slot.Value == rightBlock.ParentSlot.Slot.Value {
-			var slotI int
-			var newRootBlock [SlotCount]LinkedArrayListSlot
-			populateArray(&newRootBlock)
-			if size > 0 {
-				if nextSlots[0] != nil {
-					newRootBlock[slotI] = *nextSlots[0]
-				} else {
-					newRootBlock[slotI] = leftBlock.Block[leftBlock.I]
-				}
-				slotI++
-			}
-			if size > 1 {
-				for j := int(leftBlock.I) + 1; j < int(rightBlock.I); j++ {
-					newRootBlock[slotI] = leftBlock.Block[j]
-					slotI++
-				}
-				if nextSlots[1] != nil {
-					newRootBlock[slotI] = *nextSlots[1]
-				} else {
-					newRootBlock[slotI] = leftBlock.Block[rightBlock.I]
-				}
-			}
-			nextBlocks[0] = &newRootBlock
-		} else {
-			var slotI int
-			var newLeftBlock [SlotCount]LinkedArrayListSlot
-			populateArray(&newLeftBlock)
-			if nextSlots[0] != nil {
-				newLeftBlock[slotI] = *nextSlots[0]
-			} else {
-				newLeftBlock[slotI] = leftBlock.Block[leftBlock.I]
-			}
-			slotI++
-			for j := int(leftBlock.I) + 1; j < SlotCount; j++ {
-				newLeftBlock[slotI] = leftBlock.Block[j]
-				slotI++
-			}
-			nextBlocks[0] = &newLeftBlock
-
-			slotI = 0
-			var newRightBlock [SlotCount]LinkedArrayListSlot
-			populateArray(&newRightBlock)
-			for j := 0; j < int(rightBlock.I); j++ {
-				newRightBlock[slotI] = rightBlock.Block[j]
-				slotI++
-			}
-			if nextSlots[1] != nil {
-				newRightBlock[slotI] = *nextSlots[1]
-			} else {
-				newRightBlock[slotI] = rightBlock.Block[rightBlock.I]
-			}
-			nextBlocks[1] = &newRightBlock
-
-			nextShift++
-		}
-
-		nextSlots = [2]*LinkedArrayListSlot{nil, nil}
-
-		coreLen, err := db.Core.Length()
-		if err != nil {
-			return LinkedArrayListHeader{}, err
-		}
-		if err := db.Core.SeekTo(coreLen); err != nil {
-			return LinkedArrayListHeader{}, err
-		}
-
-		for j := 0; j < 2; j++ {
-			blockMaybe := nextBlocks[j]
-			origBlockInfo := origBlockInfos[j]
-
-			if blockMaybe != nil {
-				eql := true
-				for k := 0; k < SlotCount; k++ {
-					if blockMaybe[k].Slot != origBlockInfo.Block[k].Slot {
-						eql = false
-						break
-					}
-				}
-				if eql {
-					s := origBlockInfo.ParentSlot
-					nextSlots[j] = &s
-				} else {
-					nextPtr, err := db.Core.Position()
-					if err != nil {
-						return LinkedArrayListHeader{}, err
-					}
-					var leafCount int64
-					for k := 0; k < SlotCount; k++ {
-						b := blockMaybe[k].ToBytes()
-						if err := db.Core.Write(b[:]); err != nil {
-							return LinkedArrayListHeader{}, err
-						}
-						if isLeafNode {
-							if !blockMaybe[k].Slot.Empty() {
-								leafCount++
-							}
-						} else {
-							leafCount += blockMaybe[k].Size
-						}
-					}
-					var full bool
-					if j == 0 {
-						full = true
-					}
-					s := LinkedArrayListSlot{
-						Size: leafCount,
-						Slot: Slot{Value: nextPtr, Tag: TagIndex, Full: full},
-					}
-					nextSlots[j] = &s
-				}
-			}
-		}
-
-		if nextSlots[0] != nil && nextSlots[1] == nil {
-			break
-		}
+	if err != nil {
+		return BTreeJoinResult{}, err
 	}
 
-	rootSlot := nextSlots[0]
-	if rootSlot == nil {
-		return LinkedArrayListHeader{}, ErrExpectedRootNode
+	children := make([]Slot, a.Num, BTreeSlotCount+1)
+	counts := make([]int64, a.Num, BTreeSlotCount+1)
+	copy(children, a.Children[:a.Num])
+	copy(counts, a.Counts[:a.Num])
+	children[last] = Slot{Value: sub.NodePtr, Tag: TagIndex}
+	counts[last] = sub.Count
+	total := a.Num
+	if sub.Split != nil {
+		children = append(children, Slot{Value: sub.Split.NodePtr, Tag: TagIndex})
+		counts = append(counts, sub.Split.Count)
+		total++
 	}
-
-	return LinkedArrayListHeader{Shift: nextShift, Ptr: rootSlot.Slot.Value, Size: size}, nil
+	return db.btreeAssembleBranch(children, counts, total)
 }
 
-func (db *Database) readLinkedArrayListConcat(headerA, headerB LinkedArrayListHeader) (LinkedArrayListHeader, error) {
-	// read the first list's blocks
-	var blocksA []LinkedArrayListBlockInfo
-	var keyA int64
-	if headerA.Size == 0 {
-		keyA = 0
+// join a (shorter) into the leftmost spine of b (taller), at height ha
+func (db *Database) btreeJoinLeft(aPtr int64, ha int, bPtr int64, hb int) (BTreeJoinResult, error) {
+	b, err := db.readBTreeNode(bPtr)
+	if err != nil {
+		return BTreeJoinResult{}, err
+	}
+	var sub BTreeJoinResult
+	if hb-1 == ha {
+		aNode, aerr := db.readBTreeNode(aPtr)
+		if aerr != nil {
+			return BTreeJoinResult{}, aerr
+		}
+		firstChild, ferr := db.readBTreeNode(b.Children[0].Value)
+		if ferr != nil {
+			return BTreeJoinResult{}, ferr
+		}
+		sub, err = db.btreeMergeNodes(aNode, firstChild)
 	} else {
-		keyA = headerA.Size - 1
+		sub, err = db.btreeJoinLeft(aPtr, ha, b.Children[0].Value, hb-1)
 	}
-	if err := db.readLinkedArrayListBlocks(headerA.Ptr, keyA, headerA.Shift, &blocksA); err != nil {
-		return LinkedArrayListHeader{}, err
-	}
-
-	// read the second list's blocks
-	var blocksB []LinkedArrayListBlockInfo
-	if err := db.readLinkedArrayListBlocks(headerB.Ptr, 0, headerB.Shift, &blocksB); err != nil {
-		return LinkedArrayListHeader{}, err
+	if err != nil {
+		return BTreeJoinResult{}, err
 	}
 
-	nextSlots := [2]*LinkedArrayListSlot{nil, nil}
-	var nextShift byte = 0
-	maxLen := max(len(blocksA), len(blocksB))
-
-	for i := 0; i < maxLen; i++ {
-		var blockInfoA, blockInfoB *LinkedArrayListBlockInfo
-		if i < len(blocksA) {
-			b := blocksA[len(blocksA)-1-i]
-			blockInfoA = &b
-		}
-		if i < len(blocksB) {
-			b := blocksB[len(blocksB)-1-i]
-			blockInfoB = &b
-		}
-		var nextBlocksList [2]*[SlotCount]LinkedArrayListSlot
-		isLeafNode := nextSlots[0] == nil
-
-		if !isLeafNode {
-			nextShift++
-		}
-
-		blockInfos := [2]*LinkedArrayListBlockInfo{blockInfoA, blockInfoB}
-
-		for j := 0; j < 2; j++ {
-			bi := blockInfos[j]
-			if bi != nil {
-				var block [SlotCount]LinkedArrayListSlot
-				populateArray(&block)
-				targetI := 0
-				for sourceI := 0; sourceI < SlotCount; sourceI++ {
-					blockSlot := bi.Block[sourceI]
-					if !isLeafNode && bi.I == byte(sourceI) {
-						continue
-					} else if blockSlot.Slot.Empty() {
-						break
-					}
-					block[targetI] = blockSlot
-					targetI++
-				}
-				if targetI == 0 {
-					continue
-				}
-				nextBlocksList[j] = &block
-			}
-		}
-
-		slotsToWrite := make([]LinkedArrayListSlot, SlotCount*2)
-		for k := range slotsToWrite {
-			slotsToWrite[k] = LinkedArrayListSlot{Size: 0, Slot: Slot{}}
-		}
-		slotI := 0
-
-		if nextBlocksList[0] != nil {
-			for _, bs := range nextBlocksList[0] {
-				if bs.Slot.Empty() {
-					break
-				}
-				slotsToWrite[slotI] = bs
-				slotI++
-			}
-		}
-		for _, sm := range nextSlots {
-			if sm != nil {
-				slotsToWrite[slotI] = *sm
-				slotI++
-			}
-		}
-		if nextBlocksList[1] != nil {
-			for _, bs := range nextBlocksList[1] {
-				if bs.Slot.Empty() {
-					break
-				}
-				slotsToWrite[slotI] = bs
-				slotI++
-			}
-		}
-
-		nextSlots = [2]*LinkedArrayListSlot{nil, nil}
-
-		var blocks [2][SlotCount]LinkedArrayListSlot
-		populateArray(&blocks[0])
-		populateArray(&blocks[1])
-
-		if slotI > SlotCount {
-			if headerA.Size < headerB.Size {
-				for j := 0; j < slotI-SlotCount; j++ {
-					blocks[0][j] = slotsToWrite[j]
-				}
-				for j := 0; j < SlotCount; j++ {
-					blocks[1][j] = slotsToWrite[j+(slotI-SlotCount)]
-				}
-			} else {
-				for j := 0; j < SlotCount; j++ {
-					blocks[0][j] = slotsToWrite[j]
-				}
-				for j := 0; j < slotI-SlotCount; j++ {
-					blocks[1][j] = slotsToWrite[j+SlotCount]
-				}
-			}
-		} else {
-			for j := 0; j < slotI; j++ {
-				blocks[0][j] = slotsToWrite[j]
-			}
-		}
-
-		coreLen, err := db.Core.Length()
-		if err != nil {
-			return LinkedArrayListHeader{}, err
-		}
-		if err := db.Core.SeekTo(coreLen); err != nil {
-			return LinkedArrayListHeader{}, err
-		}
-
-		for blockI := 0; blockI < 2; blockI++ {
-			block := blocks[blockI]
-			if block[0].Slot.Empty() {
-				break
-			}
-
-			nextPtr, err := db.Core.Position()
-			if err != nil {
-				return LinkedArrayListHeader{}, err
-			}
-			var leafCount int64
-			for _, bs := range block {
-				b := bs.ToBytes()
-				if err := db.Core.Write(b[:]); err != nil {
-					return LinkedArrayListHeader{}, err
-				}
-				if isLeafNode {
-					if !bs.Slot.Empty() {
-						leafCount++
-					}
-				} else {
-					leafCount += bs.Size
-				}
-			}
-
-			s := LinkedArrayListSlot{Size: leafCount, Slot: Slot{Value: nextPtr, Tag: TagIndex, Full: true}}
-			nextSlots[blockI] = &s
-		}
+	children := make([]Slot, 0, BTreeSlotCount+1)
+	counts := make([]int64, 0, BTreeSlotCount+1)
+	children = append(children, Slot{Value: sub.NodePtr, Tag: TagIndex})
+	counts = append(counts, sub.Count)
+	if sub.Split != nil {
+		children = append(children, Slot{Value: sub.Split.NodePtr, Tag: TagIndex})
+		counts = append(counts, sub.Split.Count)
 	}
+	children = append(children, b.Children[1:b.Num]...)
+	counts = append(counts, b.Counts[1:b.Num]...)
+	return db.btreeAssembleBranch(children, counts, len(children))
+}
 
-	var rootPtr int64
-	if nextSlots[0] != nil {
-		if nextSlots[1] != nil {
-			var block [SlotCount]LinkedArrayListSlot
-			populateArray(&block)
-			block[0] = *nextSlots[0]
-			block[1] = *nextSlots[1]
-
-			newPtr, err := db.Core.Length()
-			if err != nil {
-				return LinkedArrayListHeader{}, err
-			}
-			for _, bs := range block {
-				b := bs.ToBytes()
-				if err := db.Core.Write(b[:]); err != nil {
-					return LinkedArrayListHeader{}, err
-				}
-			}
-
-			if nextShift == MaxBranchLength {
-				return LinkedArrayListHeader{}, ErrMaxShiftExceeded
-			}
-			nextShift++
-			rootPtr = newPtr
-		} else {
-			rootPtr = nextSlots[0].Slot.Value
+func (db *Database) btreeJoin(rootA, rootB int64) (int64, error) {
+	ha, err := db.btreeHeight(rootA)
+	if err != nil {
+		return 0, err
+	}
+	hb, err := db.btreeHeight(rootB)
+	if err != nil {
+		return 0, err
+	}
+	var result BTreeJoinResult
+	if ha == hb {
+		a, aerr := db.readBTreeNode(rootA)
+		if aerr != nil {
+			return 0, aerr
 		}
+		b, berr := db.readBTreeNode(rootB)
+		if berr != nil {
+			return 0, berr
+		}
+		result, err = db.btreeMergeNodes(a, b)
+	} else if ha > hb {
+		result, err = db.btreeJoinRight(rootA, ha, rootB, hb)
 	} else {
-		rootPtr = headerA.Ptr
+		result, err = db.btreeJoinLeft(rootA, ha, rootB, hb)
 	}
+	if err != nil {
+		return 0, err
+	}
+	return db.btreeMakeRoot(result)
+}
 
-	return LinkedArrayListHeader{
-		Shift: nextShift,
-		Ptr:   rootPtr,
-		Size:  headerA.Size + headerB.Size,
-	}, nil
+// build a tree from a run of sibling children (already height-h-1 subtrees): empty -> a
+// new empty leaf, one -> that child unwrapped, many -> a branch
+func (db *Database) btreeSubtree(children []Slot, counts []int64, start, length int) (int64, error) {
+	if length == 0 {
+		return db.btreeNewRoot()
+	}
+	if length == 1 {
+		return children[start].Value, nil
+	}
+	subChildren := make([]Slot, length)
+	subCounts := make([]int64, length)
+	copy(subChildren, children[start:start+length])
+	copy(subCounts, counts[start:start+length])
+	res, err := db.btreeAssembleBranch(subChildren, subCounts, length)
+	if err != nil {
+		return 0, err
+	}
+	return res.NodePtr, nil
+}
+
+func (db *Database) btreeSplit(rootPtr, rank int64) (BTreeSplitResult, error) {
+	node, err := db.readBTreeNode(rootPtr)
+	if err != nil {
+		return BTreeSplitResult{}, err
+	}
+	if node.Kind == BTreeKindLeaf {
+		r := int(rank)
+		left := BTreeNode{Kind: BTreeKindLeaf, Num: r}
+		copy(left.Values[:r], node.Values[:r])
+		right := BTreeNode{Kind: BTreeKindLeaf, Num: node.Num - r}
+		copy(right.Values[:node.Num-r], node.Values[r:node.Num])
+		leftPtr, lerr := db.writeBTreeNode(left)
+		if lerr != nil {
+			return BTreeSplitResult{}, lerr
+		}
+		rightPtr, rerr := db.writeBTreeNode(right)
+		if rerr != nil {
+			return BTreeSplitResult{}, rerr
+		}
+		return BTreeSplitResult{Left: leftPtr, Right: rightPtr}, nil
+	}
+	i := 0
+	rem := rank
+	for i+1 < node.Num && rem > node.Counts[i] {
+		rem -= node.Counts[i]
+		i++
+	}
+	child, err := db.btreeSplit(node.Children[i].Value, rem)
+	if err != nil {
+		return BTreeSplitResult{}, err
+	}
+	leftSub, err := db.btreeSubtree(node.Children[:], node.Counts[:], 0, i)
+	if err != nil {
+		return BTreeSplitResult{}, err
+	}
+	rightSub, err := db.btreeSubtree(node.Children[:], node.Counts[:], i+1, node.Num-(i+1))
+	if err != nil {
+		return BTreeSplitResult{}, err
+	}
+	joinedLeft, err := db.btreeJoin(leftSub, child.Left)
+	if err != nil {
+		return BTreeSplitResult{}, err
+	}
+	joinedRight, err := db.btreeJoin(child.Right, rightSub)
+	if err != nil {
+		return BTreeSplitResult{}, err
+	}
+	return BTreeSplitResult{Left: joinedLeft, Right: joinedRight}, nil
 }
 
 // Compaction helpers
@@ -1872,7 +1799,7 @@ func remapSlot(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64
 		if mapped, ok := offsetMap[slot.Value]; ok {
 			return Slot{Value: mapped, Tag: slot.Tag, Full: slot.Full}, nil
 		}
-		newOffset, err := remapLinkedArrayList(sourceCore, targetCore, hashSize, offsetMap, slot)
+		newOffset, err := remapBTree(sourceCore, targetCore, hashSize, offsetMap, slot)
 		if err != nil {
 			return Slot{}, err
 		}
@@ -2031,20 +1958,20 @@ func remapArrayList(sourceCore, targetCore Core, hashSize uint16, offsetMap map[
 	return newOffset, nil
 }
 
-func remapLinkedArrayList(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, slot Slot) (int64, error) {
+func remapBTree(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, slot Slot) (int64, error) {
 	if err := sourceCore.SeekTo(slot.Value); err != nil {
 		return 0, err
 	}
-	var headerBytes [LinkedArrayListHeaderLength]byte
+	var headerBytes [BTreeHeaderLength]byte
 	if err := sourceCore.Read(headerBytes[:]); err != nil {
 		return 0, err
 	}
-	header, err := LinkedArrayListHeaderFromBytes(headerBytes[:])
+	header, err := BTreeHeaderFromBytes(headerBytes[:])
 	if err != nil {
 		return 0, err
 	}
 
-	remappedPtr, err := remapLinkedArrayListBlock(sourceCore, targetCore, hashSize, offsetMap, header.Ptr)
+	remappedRoot, err := remapBTreeNode(sourceCore, targetCore, hashSize, offsetMap, header.RootPtr)
 	if err != nil {
 		return 0, err
 	}
@@ -2056,7 +1983,7 @@ func remapLinkedArrayList(sourceCore, targetCore Core, hashSize uint16, offsetMa
 	if err := targetCore.SeekTo(newOffset); err != nil {
 		return 0, err
 	}
-	newHeader := LinkedArrayListHeader{Shift: header.Shift, Ptr: remappedPtr, Size: header.Size}
+	newHeader := BTreeHeader{RootPtr: remappedRoot, Size: header.Size}
 	nhb := newHeader.ToBytes()
 	if err := targetCore.Write(nhb[:]); err != nil {
 		return 0, err
@@ -2065,64 +1992,115 @@ func remapLinkedArrayList(sourceCore, targetCore Core, hashSize uint16, offsetMa
 	return newOffset, nil
 }
 
-func remapLinkedArrayListBlock(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, blockOffset int64) (int64, error) {
-	if mapped, ok := offsetMap[blockOffset]; ok {
+func remapBTreeNode(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, nodeOffset int64) (int64, error) {
+	if mapped, ok := offsetMap[nodeOffset]; ok {
 		return mapped, nil
 	}
 
-	if err := sourceCore.SeekTo(blockOffset); err != nil {
+	if err := sourceCore.SeekTo(nodeOffset); err != nil {
 		return 0, err
 	}
-	blockBytes := make([]byte, LinkedArrayListIndexBlockSize)
-	if err := sourceCore.Read(blockBytes); err != nil {
+	var nodeHeader [BTreeNodeHeaderSize]byte
+	if err := sourceCore.Read(nodeHeader[:]); err != nil {
 		return 0, err
 	}
+	kindInt := nodeHeader[0]
+	if kindInt > byte(BTreeKindBranch) {
+		return 0, ErrInvalidBTreeNodeKind
+	}
+	kind := BTreeNodeKind(kindInt)
+	num := nodeHeader[1]
 
-	var slots [SlotCount]LinkedArrayListSlot
-	for i := 0; i < SlotCount; i++ {
-		s, err := LinkedArrayListSlotFromBytes(blockBytes[i*LinkedArrayListSlotLength : (i+1)*LinkedArrayListSlotLength])
+	switch kind {
+	case BTreeKindLeaf:
+		body := make([]byte, SlotLength*BTreeSlotCount)
+		if err := sourceCore.Read(body); err != nil {
+			return 0, err
+		}
+		var slots [BTreeSlotCount]Slot
+		for i := 0; i < BTreeSlotCount; i++ {
+			var sb [SlotLength]byte
+			copy(sb[:], body[i*SlotLength:i*SlotLength+SlotLength])
+			remapped, err := remapSlot(sourceCore, targetCore, hashSize, offsetMap, SlotFromBytes(sb))
+			if err != nil {
+				return 0, err
+			}
+			slots[i] = remapped
+		}
+
+		newOffset, err := targetCore.Length()
 		if err != nil {
 			return 0, err
 		}
-		slots[i] = s
-	}
-
-	var remappedSlots [SlotCount]LinkedArrayListSlot
-	for i := 0; i < SlotCount; i++ {
-		s := slots[i]
-		if s.Slot.Tag == TagIndex {
-			remappedPtr, err := remapLinkedArrayListBlock(sourceCore, targetCore, hashSize, offsetMap, s.Slot.Value)
-			if err != nil {
-				return 0, err
-			}
-			remappedSlots[i] = LinkedArrayListSlot{Size: s.Size, Slot: Slot{Value: remappedPtr, Tag: TagIndex, Full: s.Slot.Full}}
-		} else if s.Slot.Empty() {
-			remappedSlots[i] = s
-		} else {
-			remapped, err := remapSlot(sourceCore, targetCore, hashSize, offsetMap, s.Slot)
-			if err != nil {
-				return 0, err
-			}
-			remappedSlots[i] = LinkedArrayListSlot{Size: s.Size, Slot: remapped}
-		}
-	}
-
-	newOffset, err := targetCore.Length()
-	if err != nil {
-		return 0, err
-	}
-	if err := targetCore.SeekTo(newOffset); err != nil {
-		return 0, err
-	}
-	for _, s := range remappedSlots {
-		b := s.ToBytes()
-		if err := targetCore.Write(b[:]); err != nil {
+		if err := targetCore.SeekTo(newOffset); err != nil {
 			return 0, err
 		}
-	}
+		if err := targetCore.Write([]byte{kindInt, num}); err != nil {
+			return 0, err
+		}
+		for _, s := range slots {
+			b := s.ToBytes()
+			if err := targetCore.Write(b[:]); err != nil {
+				return 0, err
+			}
+		}
 
-	offsetMap[blockOffset] = newOffset
-	return newOffset, nil
+		offsetMap[nodeOffset] = newOffset
+		return newOffset, nil
+	case BTreeKindBranch:
+		body := make([]byte, (SlotLength+8)*BTreeSlotCount)
+		if err := sourceCore.Read(body); err != nil {
+			return 0, err
+		}
+		var children [BTreeSlotCount]Slot
+		for i := 0; i < BTreeSlotCount; i++ {
+			var sb [SlotLength]byte
+			copy(sb[:], body[i*SlotLength:i*SlotLength+SlotLength])
+			child := SlotFromBytes(sb)
+			if child.Tag == TagIndex {
+				remappedPtr, err := remapBTreeNode(sourceCore, targetCore, hashSize, offsetMap, child.Value)
+				if err != nil {
+					return 0, err
+				}
+				children[i] = Slot{Value: remappedPtr, Tag: TagIndex, Full: child.Full}
+			} else {
+				children[i] = child
+			}
+		}
+		countsOffset := SlotLength * BTreeSlotCount
+		var counts [BTreeSlotCount]int64
+		for i := 0; i < BTreeSlotCount; i++ {
+			counts[i] = int64(binary.BigEndian.Uint64(body[countsOffset+i*8 : countsOffset+i*8+8]))
+		}
+
+		newOffset, err := targetCore.Length()
+		if err != nil {
+			return 0, err
+		}
+		if err := targetCore.SeekTo(newOffset); err != nil {
+			return 0, err
+		}
+		if err := targetCore.Write([]byte{kindInt, num}); err != nil {
+			return 0, err
+		}
+		for _, s := range children {
+			b := s.ToBytes()
+			if err := targetCore.Write(b[:]); err != nil {
+				return 0, err
+			}
+		}
+		for _, c := range counts {
+			var cb [8]byte
+			binary.BigEndian.PutUint64(cb[:], uint64(c))
+			if err := targetCore.Write(cb[:]); err != nil {
+				return 0, err
+			}
+		}
+
+		offsetMap[nodeOffset] = newOffset
+		return newOffset, nil
+	}
+	return 0, ErrUnreachable
 }
 
 func remapHashMapOrSet(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, slot Slot, counted bool) (int64, error) {

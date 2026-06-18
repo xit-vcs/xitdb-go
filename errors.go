@@ -25,6 +25,8 @@ var (
 	ErrInvalidFormatTagSize       = errors.New("invalid format tag size")
 	ErrUnexpectedWriterPosition   = errors.New("unexpected writer position")
 	ErrMaxShiftExceeded           = errors.New("max shift exceeded")
+	ErrInvalidBTreeNode           = errors.New("invalid btree node")
+	ErrInvalidBTreeNodeKind       = errors.New("invalid btree node kind")
 	ErrNotImplemented             = errors.New("not implemented")
 	ErrUnreachable                = errors.New("unreachable")
 )
