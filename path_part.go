@@ -507,13 +507,8 @@ func (p LinkedArrayListAppend) readSlotPointer(db *Database, isTopLevel bool, wr
 		return SlotPointer{}, err
 	}
 
-	// fill in the value via the rest of the path
-	valuePosition := result.ValuePosition
-	finalSlotPtr, err := db.readSlotPointer(writeMode, path, pathI+1, SlotPointer{Position: &valuePosition, Slot: Slot{}})
-	if err != nil {
-		return SlotPointer{}, err
-	}
-
+	// update the header before filling in the value, so that a failure in the
+	// rest of the path leaves the tree and header consistent
 	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
 	}
@@ -523,7 +518,9 @@ func (p LinkedArrayListAppend) readSlotPointer(db *Database, isTopLevel bool, wr
 		return SlotPointer{}, err
 	}
 
-	return finalSlotPtr, nil
+	// fill in the value via the rest of the path
+	valuePosition := result.ValuePosition
+	return db.readSlotPointer(writeMode, path, pathI+1, SlotPointer{Position: &valuePosition, Slot: Slot{}})
 }
 
 // LinkedArrayListSlicePart
@@ -569,11 +566,9 @@ func (p LinkedArrayListSlicePart) readSlotPointer(db *Database, isTopLevel bool,
 		return SlotPointer{}, err
 	}
 	newRootPtr := sliced.Left
-	finalSlotPtr, err := db.readSlotPointer(writeMode, path, pathI+1, slotPtr)
-	if err != nil {
-		return SlotPointer{}, err
-	}
 
+	// update the header before recursing into the rest of the path, so that a
+	// failure there leaves the tree and header consistent
 	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
 	}
@@ -583,7 +578,7 @@ func (p LinkedArrayListSlicePart) readSlotPointer(db *Database, isTopLevel bool,
 		return SlotPointer{}, err
 	}
 
-	return finalSlotPtr, nil
+	return db.readSlotPointer(writeMode, path, pathI+1, slotPtr)
 }
 
 // LinkedArrayListConcat
@@ -640,11 +635,9 @@ func (p LinkedArrayListConcatPart) readSlotPointer(db *Database, isTopLevel bool
 	if err != nil {
 		return SlotPointer{}, err
 	}
-	finalSlotPtr, err := db.readSlotPointer(writeMode, path, pathI+1, slotPtr)
-	if err != nil {
-		return SlotPointer{}, err
-	}
 
+	// update the header before recursing into the rest of the path, so that a
+	// failure there leaves the tree and header consistent
 	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
 	}
@@ -654,7 +647,7 @@ func (p LinkedArrayListConcatPart) readSlotPointer(db *Database, isTopLevel bool
 		return SlotPointer{}, err
 	}
 
-	return finalSlotPtr, nil
+	return db.readSlotPointer(writeMode, path, pathI+1, slotPtr)
 }
 
 // LinkedArrayListInsert
@@ -704,12 +697,8 @@ func (p LinkedArrayListInsertPart) readSlotPointer(db *Database, isTopLevel bool
 		return SlotPointer{}, err
 	}
 
-	valuePosition := result.ValuePosition
-	finalSlotPtr, err := db.readSlotPointer(writeMode, path, pathI+1, SlotPointer{Position: &valuePosition, Slot: Slot{}})
-	if err != nil {
-		return SlotPointer{}, err
-	}
-
+	// update the header before filling in the value, so that a failure in the
+	// rest of the path leaves the tree and header consistent
 	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
 	}
@@ -719,7 +708,8 @@ func (p LinkedArrayListInsertPart) readSlotPointer(db *Database, isTopLevel bool
 		return SlotPointer{}, err
 	}
 
-	return finalSlotPtr, nil
+	valuePosition := result.ValuePosition
+	return db.readSlotPointer(writeMode, path, pathI+1, SlotPointer{Position: &valuePosition, Slot: Slot{}})
 }
 
 // LinkedArrayListRemove
@@ -773,11 +763,9 @@ func (p LinkedArrayListRemovePart) readSlotPointer(db *Database, isTopLevel bool
 	if err != nil {
 		return SlotPointer{}, err
 	}
-	finalSlotPtr, err := db.readSlotPointer(writeMode, path, pathI+1, slotPtr)
-	if err != nil {
-		return SlotPointer{}, err
-	}
 
+	// update the header before recursing into the rest of the path, so that a
+	// failure there leaves the tree and header consistent
 	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
 	}
@@ -787,7 +775,7 @@ func (p LinkedArrayListRemovePart) readSlotPointer(db *Database, isTopLevel bool
 		return SlotPointer{}, err
 	}
 
-	return finalSlotPtr, nil
+	return db.readSlotPointer(writeMode, path, pathI+1, slotPtr)
 }
 
 // HashMapInit
@@ -1212,16 +1200,10 @@ func (p SortedMapGetPart) readSlotPointer(db *Database, isTopLevel bool, writeMo
 	if err != nil {
 		return SlotPointer{}, err
 	}
-	kvPos := result.ValuePosition - int64(db.Header.HashSize) - SlotLength
-	targetSlot, err := db.sortedTargetSlot(kvPos, p.Target)
-	if err != nil {
-		return SlotPointer{}, err
-	}
-	finalSlotPtr, err := db.readSlotPointer(writeMode, path, pathI+1, targetSlot)
-	if err != nil {
-		return SlotPointer{}, err
-	}
 
+	// update the header before filling in the value, so that a failure in the
+	// rest of the path leaves the tree and header consistent (the entry exists
+	// with an empty value) rather than inserted-but-uncounted
 	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
 	}
@@ -1235,7 +1217,12 @@ func (p SortedMapGetPart) readSlotPointer(db *Database, isTopLevel bool, writeMo
 		return SlotPointer{}, err
 	}
 
-	return finalSlotPtr, nil
+	kvPos := result.ValuePosition - int64(db.Header.HashSize) - SlotLength
+	targetSlot, err := db.sortedTargetSlot(kvPos, p.Target)
+	if err != nil {
+		return SlotPointer{}, err
+	}
+	return db.readSlotPointer(writeMode, path, pathI+1, targetSlot)
 }
 
 // SortedMapGetIndex

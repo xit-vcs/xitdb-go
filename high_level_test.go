@@ -3228,6 +3228,33 @@ func testSortedMap(t *testing.T, core Core, hasher Hasher) {
 				t.Fatalf("expected ErrCursorNotWriteable, got %v", err)
 			}
 
+			// a write that fails after the key is inserted (a missing key written
+			// through the non-writeable key slot) must still leave the count
+			// consistent with the tree, not inserted-but-uncounted
+			countBeforeFailedWrite, err := m.Count()
+			if err != nil {
+				return err
+			}
+			if _, err := m.writeCursor.WritePath([]PathPart{
+				SortedMapGetPart{Target: SortedMapGetKey{Key: []byte("missing-key")}},
+				WriteData{Data: NewBytes([]byte("x"))},
+			}); err != ErrCursorNotWriteable {
+				t.Fatalf("expected ErrCursorNotWriteable, got %v", err)
+			}
+			if c, err := m.Count(); err != nil {
+				return err
+			} else {
+				assertEqual(t, countBeforeFailedWrite+1, c)
+			}
+			if kv, err := m.GetKeyValuePair("missing-key"); err != nil {
+				return err
+			} else if kv == nil {
+				t.Fatal("expected missing-key to be present after failed write")
+			}
+			if _, err := m.Remove("missing-key"); err != nil { // restore the map for the assertions below
+				return err
+			}
+
 			return nil
 		})
 		if err != nil {
