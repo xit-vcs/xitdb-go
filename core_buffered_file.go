@@ -91,6 +91,13 @@ func (c *CoreBufferedFile) Write(p []byte) error {
 			return err
 		}
 	} else {
+		// a direct disk write that overlaps the buffered region would be
+		// clobbered by a later flush of stale buffer bytes, so flush first
+		if c.filePos < c.memoryPos+c.memorySize() && c.filePos+int64(len(p)) > c.memoryPos {
+			if err := c.Flush(); err != nil {
+				return err
+			}
+		}
 		if _, err := c.file.Seek(c.filePos, 0); err != nil {
 			return err
 		}
