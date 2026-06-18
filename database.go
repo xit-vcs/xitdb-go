@@ -23,6 +23,10 @@ const (
 	BTreeNodeHeaderSize                  = 2
 	BTreeLeafBlockSize                   = BTreeNodeHeaderSize + SlotLength*BTreeSlotCount
 	BTreeBranchBlockSize                 = BTreeNodeHeaderSize + (SlotLength+8)*BTreeSlotCount
+	// sorted_map / sorted_set node block: a leaf holds BTreeSlotCount kv_pair slots;
+	// a branch holds child slots, separator slots, then BTreeSlotCount u64 counts
+	SortedLeafBlockSize                  = BTreeNodeHeaderSize + SlotLength*BTreeSlotCount
+	SortedBranchBlockSize                = BTreeNodeHeaderSize + (SlotLength*2+8)*BTreeSlotCount
 )
 
 var (
@@ -284,6 +288,80 @@ type BTreeSplitResult struct {
 	Left  int64
 	Right int64
 }
+
+// SortedNode: a count-augmented B+tree keyed on byte strings, ordered
+// lexicographically. a leaf holds .kv_pair entries in ascending key order; a branch
+// holds child slots, separator slots (the smallest key in each child's subtree;
+// Separators[0] is an unused sentinel), and per-child subtree counts.
+
+type SortedNode struct {
+	Kind       BTreeNodeKind
+	Num        int
+	Entries    [BTreeSlotCount]Slot  // leaf
+	Children   [BTreeSlotCount]Slot  // branch
+	Separators [BTreeSlotCount]Slot  // branch
+	Counts     [BTreeSlotCount]int64 // branch
+}
+
+func (n *SortedNode) SubtreeCount() int64 {
+	if n.Kind == BTreeKindLeaf {
+		return int64(n.Num)
+	}
+	var total int64
+	for i := 0; i < n.Num; i++ {
+		total += n.Counts[i]
+	}
+	return total
+}
+
+// the new right sibling produced when a node splits
+type SortedSplit struct {
+	NodePtr   int64
+	Count     int64
+	Separator Slot
+}
+
+type SortedInsertResult struct {
+	NodePtr       int64
+	Count         int64
+	ValuePosition int64
+	Added         bool
+	Split         *SortedSplit
+}
+
+type SortedRemoveResult struct {
+	NodePtr int64
+	Found   bool
+}
+
+type SortedSlot struct {
+	Slot     Slot
+	Position int64
+}
+
+type SortedEntry struct {
+	KvSlot        Slot
+	KeySlot       Slot
+	ValuePosition int64
+}
+
+// SortedMapGetTarget
+
+type SortedMapGetTarget interface {
+	sortedMapGetTarget()
+	getKey() []byte
+}
+
+type SortedMapGetKVPair struct{ Key []byte }
+type SortedMapGetKey struct{ Key []byte }
+type SortedMapGetValue struct{ Key []byte }
+
+func (SortedMapGetKVPair) sortedMapGetTarget() {}
+func (SortedMapGetKey) sortedMapGetTarget()    {}
+func (SortedMapGetValue) sortedMapGetTarget()  {}
+func (t SortedMapGetKVPair) getKey() []byte    { return t.Key }
+func (t SortedMapGetKey) getKey() []byte       { return t.Key }
+func (t SortedMapGetValue) getKey() []byte     { return t.Key }
 
 // HashMapGetTarget
 
@@ -1759,6 +1837,633 @@ func (db *Database) btreeSplit(rootPtr, rank int64) (BTreeSplitResult, error) {
 	return BTreeSplitResult{Left: joinedLeft, Right: joinedRight}, nil
 }
 
+// sorted_map / sorted_set
+
+func (db *Database) readSortedNode(ptr int64) (SortedNode, error) {
+	if err := db.Core.SeekTo(ptr); err != nil {
+		return SortedNode{}, err
+	}
+	var headerBytes [BTreeNodeHeaderSize]byte
+	if err := db.Core.Read(headerBytes[:]); err != nil {
+		return SortedNode{}, err
+	}
+	kindInt := headerBytes[0]
+	if kindInt > byte(BTreeKindBranch) {
+		return SortedNode{}, ErrInvalidBTreeNodeKind
+	}
+	kind := BTreeNodeKind(kindInt)
+	num := int(headerBytes[1])
+	if num > BTreeSlotCount {
+		return SortedNode{}, ErrInvalidBTreeNode
+	}
+	node := SortedNode{Kind: kind, Num: num}
+	switch kind {
+	case BTreeKindLeaf:
+		body := make([]byte, SlotLength*BTreeSlotCount)
+		if err := db.Core.Read(body); err != nil {
+			return SortedNode{}, err
+		}
+		for i := 0; i < BTreeSlotCount; i++ {
+			var sb [SlotLength]byte
+			copy(sb[:], body[i*SlotLength:i*SlotLength+SlotLength])
+			node.Entries[i] = SlotFromBytes(sb)
+		}
+	case BTreeKindBranch:
+		body := make([]byte, (SlotLength*2+8)*BTreeSlotCount)
+		if err := db.Core.Read(body); err != nil {
+			return SortedNode{}, err
+		}
+		for i := 0; i < BTreeSlotCount; i++ {
+			var sb [SlotLength]byte
+			copy(sb[:], body[i*SlotLength:i*SlotLength+SlotLength])
+			node.Children[i] = SlotFromBytes(sb)
+		}
+		sepOffset := SlotLength * BTreeSlotCount
+		for i := 0; i < BTreeSlotCount; i++ {
+			var sb [SlotLength]byte
+			copy(sb[:], body[sepOffset+i*SlotLength:sepOffset+i*SlotLength+SlotLength])
+			node.Separators[i] = SlotFromBytes(sb)
+		}
+		countsOffset := SlotLength * 2 * BTreeSlotCount
+		for i := 0; i < BTreeSlotCount; i++ {
+			node.Counts[i] = int64(binary.BigEndian.Uint64(body[countsOffset+i*8 : countsOffset+i*8+8]))
+		}
+	}
+	return node, nil
+}
+
+func (db *Database) writeSortedNodeAt(node SortedNode, ptr int64) error {
+	if err := db.Core.SeekTo(ptr); err != nil {
+		return err
+	}
+	var bodySize int
+	if node.Kind == BTreeKindLeaf {
+		bodySize = SortedLeafBlockSize
+	} else {
+		bodySize = SortedBranchBlockSize
+	}
+	buf := make([]byte, bodySize)
+	buf[0] = byte(node.Kind)
+	buf[1] = byte(node.Num)
+	off := BTreeNodeHeaderSize
+	switch node.Kind {
+	case BTreeKindLeaf:
+		for i := 0; i < BTreeSlotCount; i++ {
+			sb := node.Entries[i].ToBytes()
+			copy(buf[off:], sb[:])
+			off += SlotLength
+		}
+	case BTreeKindBranch:
+		for i := 0; i < BTreeSlotCount; i++ {
+			sb := node.Children[i].ToBytes()
+			copy(buf[off:], sb[:])
+			off += SlotLength
+		}
+		for i := 0; i < BTreeSlotCount; i++ {
+			sb := node.Separators[i].ToBytes()
+			copy(buf[off:], sb[:])
+			off += SlotLength
+		}
+		for i := 0; i < BTreeSlotCount; i++ {
+			binary.BigEndian.PutUint64(buf[off:], uint64(node.Counts[i]))
+			off += 8
+		}
+	}
+	return db.Core.Write(buf)
+}
+
+func (db *Database) writeSortedNode(node SortedNode) (int64, error) {
+	ptr, err := db.Core.Length()
+	if err != nil {
+		return 0, err
+	}
+	if err := db.writeSortedNodeAt(node, ptr); err != nil {
+		return 0, err
+	}
+	return ptr, nil
+}
+
+// reuse oldPtr's position in place when it belongs to this transaction (mirrors
+// btreeWriteNode / the TxStart path-copying model)
+func (db *Database) sortedWriteNode(node SortedNode, oldPtr int64) (int64, error) {
+	if db.btreeReusable(oldPtr) {
+		if err := db.writeSortedNodeAt(node, oldPtr); err != nil {
+			return 0, err
+		}
+		return oldPtr, nil
+	}
+	return db.writeSortedNode(node)
+}
+
+func (db *Database) readKvPair(kvSlot Slot) (KeyValuePair, error) {
+	if kvSlot.Tag != TagKVPair {
+		return KeyValuePair{}, ErrUnexpectedTag
+	}
+	if err := db.Core.SeekTo(kvSlot.Value); err != nil {
+		return KeyValuePair{}, err
+	}
+	b := make([]byte, KeyValuePairLength(int(db.Header.HashSize)))
+	if err := db.Core.Read(b); err != nil {
+		return KeyValuePair{}, err
+	}
+	return KeyValuePairFromBytes(b, int(db.Header.HashSize)), nil
+}
+
+// lexicographic comparison of the byte key stored at keySlot (a bytes or short_bytes
+// slot) against the in-memory target. returns <0, 0, or >0.
+func (db *Database) compareKey(keySlot Slot, target []byte) (int, error) {
+	switch keySlot.Tag {
+	case TagShortBytes:
+		var buf [8]byte
+		binary.BigEndian.PutUint64(buf[:], uint64(keySlot.Value))
+		total := 8
+		if keySlot.Full {
+			total = 6
+		}
+		length := total
+		for i := 0; i < total; i++ {
+			if buf[i] == 0 {
+				length = i
+				break
+			}
+		}
+		return bytes.Compare(buf[:length], target), nil
+	case TagBytes:
+		if err := db.Core.SeekTo(keySlot.Value); err != nil {
+			return 0, err
+		}
+		length, err := readLong(db.Core)
+		if err != nil {
+			return 0, err
+		}
+		keyBytes := make([]byte, length)
+		if err := db.Core.Read(keyBytes); err != nil {
+			return 0, err
+		}
+		return bytes.Compare(keyBytes, target), nil
+	default:
+		return 0, ErrUnexpectedTag
+	}
+}
+
+// descend by key to the matching leaf entry (the .kv_pair slot), or nil
+func (db *Database) sortedGet(rootPtr int64, key []byte) (*SortedSlot, error) {
+	nodePtr := rootPtr
+	for {
+		node, err := db.readSortedNode(nodePtr)
+		if err != nil {
+			return nil, err
+		}
+		if node.Kind == BTreeKindLeaf {
+			for i := 0; i < node.Num; i++ {
+				entry := node.Entries[i]
+				kv, err := db.readKvPair(entry)
+				if err != nil {
+					return nil, err
+				}
+				cmp, err := db.compareKey(kv.KeySlot, key)
+				if err != nil {
+					return nil, err
+				}
+				if cmp == 0 {
+					pos := nodePtr + BTreeNodeHeaderSize + int64(i)*SlotLength
+					return &SortedSlot{Slot: entry, Position: pos}, nil
+				}
+				if cmp > 0 {
+					return nil, nil
+				}
+			}
+			return nil, nil
+		}
+		i := 0
+		for i+1 < node.Num {
+			c, err := db.compareKey(node.Separators[i+1], key)
+			if err != nil {
+				return nil, err
+			}
+			if c <= 0 {
+				i++
+			} else {
+				break
+			}
+		}
+		nodePtr = node.Children[i].Value
+	}
+}
+
+// descend by rank to the leaf entry at the given 0-based index
+func (db *Database) sortedGetByIndex(rootPtr, rank int64) (SortedSlot, error) {
+	nodePtr := rootPtr
+	rem := rank
+	for {
+		node, err := db.readSortedNode(nodePtr)
+		if err != nil {
+			return SortedSlot{}, err
+		}
+		if node.Kind == BTreeKindLeaf {
+			pos := nodePtr + BTreeNodeHeaderSize + rem*SlotLength
+			return SortedSlot{Slot: node.Entries[rem], Position: pos}, nil
+		}
+		i := 0
+		for i+1 < node.Num && rem >= node.Counts[i] {
+			rem -= node.Counts[i]
+			i++
+		}
+		nodePtr = node.Children[i].Value
+	}
+}
+
+// number of keys strictly less than key (the inverse of getByIndex)
+func (db *Database) sortedRank(rootPtr int64, key []byte) (int64, error) {
+	nodePtr := rootPtr
+	var rank int64
+	for {
+		node, err := db.readSortedNode(nodePtr)
+		if err != nil {
+			return 0, err
+		}
+		if node.Kind == BTreeKindLeaf {
+			for i := 0; i < node.Num; i++ {
+				kv, err := db.readKvPair(node.Entries[i])
+				if err != nil {
+					return 0, err
+				}
+				c, err := db.compareKey(kv.KeySlot, key)
+				if err != nil {
+					return 0, err
+				}
+				if c < 0 {
+					rank++
+				} else {
+					break
+				}
+			}
+			return rank, nil
+		}
+		i := 0
+		for i+1 < node.Num {
+			c, err := db.compareKey(node.Separators[i+1], key)
+			if err != nil {
+				return 0, err
+			}
+			if c <= 0 {
+				rank += node.Counts[i]
+				i++
+			} else {
+				break
+			}
+		}
+		nodePtr = node.Children[i].Value
+	}
+}
+
+// write a byte key as a short_bytes (inline, <=8 bytes, no interior zero) or external
+// bytes slot
+func (db *Database) writeKey(key []byte) (Slot, error) {
+	hasZero := false
+	for _, b := range key {
+		if b == 0 {
+			hasZero = true
+			break
+		}
+	}
+	if len(key) <= 8 && !hasZero {
+		var value [8]byte
+		copy(value[:], key)
+		return Slot{Value: int64(binary.BigEndian.Uint64(value[:])), Tag: TagShortBytes}, nil
+	}
+	pos, err := db.Core.Length()
+	if err != nil {
+		return Slot{}, err
+	}
+	if err := db.Core.SeekTo(pos); err != nil {
+		return Slot{}, err
+	}
+	if err := writeLong(db.Core, int64(len(key))); err != nil {
+		return Slot{}, err
+	}
+	if err := db.Core.Write(key); err != nil {
+		return Slot{}, err
+	}
+	return Slot{Value: pos, Tag: TagBytes}, nil
+}
+
+// materialize a new leaf entry: write the key bytes and a KeyValuePair with an empty
+// value (the caller fills it via ValuePosition). the hash field is unused by sorted
+// maps (navigation is by key bytes), so it is left zero.
+func (db *Database) sortedNewEntry(key []byte) (SortedEntry, error) {
+	keySlot, err := db.writeKey(key)
+	if err != nil {
+		return SortedEntry{}, err
+	}
+	kvPos, err := db.Core.Length()
+	if err != nil {
+		return SortedEntry{}, err
+	}
+	kvPair := KeyValuePair{ValueSlot: Slot{}, KeySlot: keySlot, Hash: make([]byte, db.Header.HashSize)}
+	if err := db.Core.SeekTo(kvPos); err != nil {
+		return SortedEntry{}, err
+	}
+	if err := db.Core.Write(kvPair.ToBytes()); err != nil {
+		return SortedEntry{}, err
+	}
+	return SortedEntry{KvSlot: Slot{Value: kvPos, Tag: TagKVPair}, KeySlot: keySlot, ValuePosition: kvPos + int64(db.Header.HashSize) + SlotLength}, nil
+}
+
+// insert key (or locate it for replacement) within the subtree at nodePtr,
+// path-copying nodes and maintaining separators + counts. the caller writes the value
+// at the returned ValuePosition.
+func (db *Database) sortedPut(nodePtr int64, key []byte) (SortedInsertResult, error) {
+	node, err := db.readSortedNode(nodePtr)
+	if err != nil {
+		return SortedInsertResult{}, err
+	}
+	switch node.Kind {
+	case BTreeKindLeaf:
+		idx := node.Num
+		found := false
+		for i := 0; i < node.Num; i++ {
+			kv, err := db.readKvPair(node.Entries[i])
+			if err != nil {
+				return SortedInsertResult{}, err
+			}
+			cmp, err := db.compareKey(kv.KeySlot, key)
+			if err != nil {
+				return SortedInsertResult{}, err
+			}
+			if cmp == 0 {
+				idx = i
+				found = true
+				break
+			}
+			if cmp > 0 {
+				idx = i
+				break
+			}
+		}
+
+		if found {
+			// replace: return a writable value slot, copy-on-writing the kv_pair if it
+			// belongs to a past moment
+			leaf := node
+			kvSlot := node.Entries[idx]
+			var valuePosition int64
+			if db.btreeReusable(kvSlot.Value) {
+				valuePosition = kvSlot.Value + int64(db.Header.HashSize) + SlotLength
+			} else {
+				kv, err := db.readKvPair(kvSlot)
+				if err != nil {
+					return SortedInsertResult{}, err
+				}
+				newKvPos, err := db.Core.Length()
+				if err != nil {
+					return SortedInsertResult{}, err
+				}
+				if err := db.Core.SeekTo(newKvPos); err != nil {
+					return SortedInsertResult{}, err
+				}
+				if err := db.Core.Write(kv.ToBytes()); err != nil {
+					return SortedInsertResult{}, err
+				}
+				leaf.Entries[idx] = Slot{Value: newKvPos, Tag: TagKVPair}
+				valuePosition = newKvPos + int64(db.Header.HashSize) + SlotLength
+			}
+			ptr, err := db.sortedWriteNode(leaf, nodePtr)
+			if err != nil {
+				return SortedInsertResult{}, err
+			}
+			return SortedInsertResult{NodePtr: ptr, Count: int64(node.Num), ValuePosition: valuePosition, Added: false}, nil
+		}
+
+		// insert a new entry at idx
+		entry, err := db.sortedNewEntry(key)
+		if err != nil {
+			return SortedInsertResult{}, err
+		}
+		entries := make([]Slot, 0, BTreeSlotCount+1)
+		entries = append(entries, node.Entries[:idx]...)
+		entries = append(entries, entry.KvSlot)
+		entries = append(entries, node.Entries[idx:node.Num]...)
+		total := node.Num + 1
+
+		if total <= BTreeSlotCount {
+			leaf := SortedNode{Kind: BTreeKindLeaf, Num: total}
+			copy(leaf.Entries[:total], entries[:total])
+			ptr, err := db.sortedWriteNode(leaf, nodePtr)
+			if err != nil {
+				return SortedInsertResult{}, err
+			}
+			return SortedInsertResult{NodePtr: ptr, Count: int64(total), ValuePosition: entry.ValuePosition, Added: true}, nil
+		}
+
+		// overflow: split into two leaves; the new sibling's separator is the key of its
+		// first entry
+		leftN := BTreeSplitCount
+		rightN := total - leftN
+		left := SortedNode{Kind: BTreeKindLeaf, Num: leftN}
+		copy(left.Entries[:leftN], entries[:leftN])
+		right := SortedNode{Kind: BTreeKindLeaf, Num: rightN}
+		copy(right.Entries[:rightN], entries[leftN:total])
+		sepKv, err := db.readKvPair(entries[leftN])
+		if err != nil {
+			return SortedInsertResult{}, err
+		}
+		separator := sepKv.KeySlot
+		leftPtr, err := db.sortedWriteNode(left, nodePtr)
+		if err != nil {
+			return SortedInsertResult{}, err
+		}
+		rightPtr, err := db.writeSortedNode(right)
+		if err != nil {
+			return SortedInsertResult{}, err
+		}
+		return SortedInsertResult{NodePtr: leftPtr, Count: int64(leftN), ValuePosition: entry.ValuePosition, Added: true, Split: &SortedSplit{NodePtr: rightPtr, Count: int64(rightN), Separator: separator}}, nil
+	case BTreeKindBranch:
+		i := 0
+		for i+1 < node.Num {
+			c, err := db.compareKey(node.Separators[i+1], key)
+			if err != nil {
+				return SortedInsertResult{}, err
+			}
+			if c <= 0 {
+				i++
+			} else {
+				break
+			}
+		}
+		child, err := db.sortedPut(node.Children[i].Value, key)
+		if err != nil {
+			return SortedInsertResult{}, err
+		}
+
+		children := make([]Slot, node.Num, BTreeSlotCount+1)
+		separators := make([]Slot, node.Num, BTreeSlotCount+1)
+		counts := make([]int64, node.Num, BTreeSlotCount+1)
+		copy(children, node.Children[:node.Num])
+		copy(separators, node.Separators[:node.Num])
+		copy(counts, node.Counts[:node.Num])
+		children[i] = Slot{Value: child.NodePtr, Tag: TagIndex}
+		counts[i] = child.Count
+		total := node.Num
+		if child.Split != nil {
+			children = children[:node.Num+1]
+			separators = separators[:node.Num+1]
+			counts = counts[:node.Num+1]
+			for j := node.Num; j > i+1; j-- {
+				children[j] = children[j-1]
+				separators[j] = separators[j-1]
+				counts[j] = counts[j-1]
+			}
+			children[i+1] = Slot{Value: child.Split.NodePtr, Tag: TagIndex}
+			separators[i+1] = child.Split.Separator
+			counts[i+1] = child.Split.Count
+			total = node.Num + 1
+		}
+
+		if total <= BTreeSlotCount {
+			branch := SortedNode{Kind: BTreeKindBranch, Num: total}
+			copy(branch.Children[:total], children[:total])
+			copy(branch.Separators[:total], separators[:total])
+			copy(branch.Counts[:total], counts[:total])
+			ptr, err := db.sortedWriteNode(branch, nodePtr)
+			if err != nil {
+				return SortedInsertResult{}, err
+			}
+			return SortedInsertResult{NodePtr: ptr, Count: branch.SubtreeCount(), ValuePosition: child.ValuePosition, Added: child.Added}, nil
+		}
+
+		// overflow: split into two branches; the new sibling's separator is the smallest
+		// key of its first child (separators[leftN] of the combined)
+		leftN := BTreeSplitCount
+		rightN := total - leftN
+		left := SortedNode{Kind: BTreeKindBranch, Num: leftN}
+		copy(left.Children[:leftN], children[:leftN])
+		copy(left.Separators[:leftN], separators[:leftN])
+		copy(left.Counts[:leftN], counts[:leftN])
+		right := SortedNode{Kind: BTreeKindBranch, Num: rightN}
+		copy(right.Children[:rightN], children[leftN:total])
+		copy(right.Separators[:rightN], separators[leftN:total])
+		copy(right.Counts[:rightN], counts[leftN:total])
+		separator := separators[leftN]
+		leftPtr, err := db.sortedWriteNode(left, nodePtr)
+		if err != nil {
+			return SortedInsertResult{}, err
+		}
+		rightPtr, err := db.writeSortedNode(right)
+		if err != nil {
+			return SortedInsertResult{}, err
+		}
+		return SortedInsertResult{NodePtr: leftPtr, Count: left.SubtreeCount(), ValuePosition: child.ValuePosition, Added: child.Added, Split: &SortedSplit{NodePtr: rightPtr, Count: right.SubtreeCount(), Separator: separator}}, nil
+	}
+	return SortedInsertResult{}, ErrUnreachable
+}
+
+// remove key from the subtree at nodePtr, path-copying nodes and decrementing counts.
+// an emptied leaf is left in place (see SortedRemoveResult).
+func (db *Database) sortedRemove(nodePtr int64, key []byte) (SortedRemoveResult, error) {
+	node, err := db.readSortedNode(nodePtr)
+	if err != nil {
+		return SortedRemoveResult{}, err
+	}
+	switch node.Kind {
+	case BTreeKindLeaf:
+		idx := node.Num
+		found := false
+		for i := 0; i < node.Num; i++ {
+			kv, err := db.readKvPair(node.Entries[i])
+			if err != nil {
+				return SortedRemoveResult{}, err
+			}
+			cmp, err := db.compareKey(kv.KeySlot, key)
+			if err != nil {
+				return SortedRemoveResult{}, err
+			}
+			if cmp == 0 {
+				idx = i
+				found = true
+				break
+			}
+			if cmp > 0 {
+				break
+			}
+		}
+		if !found {
+			return SortedRemoveResult{NodePtr: nodePtr, Found: false}, nil
+		}
+		leaf := SortedNode{Kind: BTreeKindLeaf, Num: node.Num - 1}
+		copy(leaf.Entries[:idx], node.Entries[:idx])
+		copy(leaf.Entries[idx:node.Num-1], node.Entries[idx+1:node.Num])
+		ptr, err := db.sortedWriteNode(leaf, nodePtr)
+		if err != nil {
+			return SortedRemoveResult{}, err
+		}
+		return SortedRemoveResult{NodePtr: ptr, Found: true}, nil
+	case BTreeKindBranch:
+		i := 0
+		for i+1 < node.Num {
+			c, err := db.compareKey(node.Separators[i+1], key)
+			if err != nil {
+				return SortedRemoveResult{}, err
+			}
+			if c <= 0 {
+				i++
+			} else {
+				break
+			}
+		}
+		child, err := db.sortedRemove(node.Children[i].Value, key)
+		if err != nil {
+			return SortedRemoveResult{}, err
+		}
+		if !child.Found {
+			return SortedRemoveResult{NodePtr: nodePtr, Found: false}, nil
+		}
+		branch := node
+		branch.Children[i] = Slot{Value: child.NodePtr, Tag: TagIndex}
+		branch.Counts[i] -= 1
+		ptr, err := db.sortedWriteNode(branch, nodePtr)
+		if err != nil {
+			return SortedRemoveResult{}, err
+		}
+		return SortedRemoveResult{NodePtr: ptr, Found: true}, nil
+	}
+	return SortedRemoveResult{}, ErrUnreachable
+}
+
+func (db *Database) sortedGrowRoot(result SortedInsertResult) (int64, error) {
+	if result.Split != nil {
+		root := SortedNode{Kind: BTreeKindBranch, Num: 2}
+		root.Children[0] = Slot{Value: result.NodePtr, Tag: TagIndex}
+		root.Children[1] = Slot{Value: result.Split.NodePtr, Tag: TagIndex}
+		root.Separators[1] = result.Split.Separator // Separators[0] is an unused sentinel
+		root.Counts[0] = result.Count
+		root.Counts[1] = result.Split.Count
+		return db.writeSortedNode(root)
+	}
+	return result.NodePtr, nil
+}
+
+// turn a located/inserted kv_pair (at kvPos) into the slot for the requested target.
+// only the value is writeable (that is how put works); the key and the kv_pair pointer
+// are immutable, so they are returned with no writeable position.
+func (db *Database) sortedTargetSlot(kvPos int64, target SortedMapGetTarget) (SlotPointer, error) {
+	kv, err := db.readKvPair(Slot{Value: kvPos, Tag: TagKVPair})
+	if err != nil {
+		return SlotPointer{}, err
+	}
+	switch target.(type) {
+	case SortedMapGetKVPair:
+		return SlotPointer{Position: nil, Slot: Slot{Value: kvPos, Tag: TagKVPair}}, nil
+	case SortedMapGetKey:
+		return SlotPointer{Position: nil, Slot: kv.KeySlot}, nil
+	case SortedMapGetValue:
+		pos := kvPos + int64(db.Header.HashSize) + SlotLength
+		return SlotPointer{Position: &pos, Slot: kv.ValueSlot}, nil
+	default:
+		return SlotPointer{}, ErrUnexpectedTag
+	}
+}
+
 // Compaction helpers
 
 func remapSlot(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, slot Slot) (Slot, error) {
@@ -1830,6 +2535,16 @@ func remapSlot(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64
 			return Slot{Value: mapped, Tag: slot.Tag, Full: slot.Full}, nil
 		}
 		newOffset, err := remapKvPair(sourceCore, targetCore, hashSize, offsetMap, slot)
+		if err != nil {
+			return Slot{}, err
+		}
+		offsetMap[slot.Value] = newOffset
+		return Slot{Value: newOffset, Tag: slot.Tag, Full: slot.Full}, nil
+	case TagSortedMap, TagSortedSet:
+		if mapped, ok := offsetMap[slot.Value]; ok {
+			return Slot{Value: mapped, Tag: slot.Tag, Full: slot.Full}, nil
+		}
+		newOffset, err := remapSortedMap(sourceCore, targetCore, hashSize, offsetMap, slot)
 		if err != nil {
 			return Slot{}, err
 		}
@@ -2084,6 +2799,168 @@ func remapBTreeNode(sourceCore, targetCore Core, hashSize uint16, offsetMap map[
 			return 0, err
 		}
 		for _, s := range children {
+			b := s.ToBytes()
+			if err := targetCore.Write(b[:]); err != nil {
+				return 0, err
+			}
+		}
+		for _, c := range counts {
+			var cb [8]byte
+			binary.BigEndian.PutUint64(cb[:], uint64(c))
+			if err := targetCore.Write(cb[:]); err != nil {
+				return 0, err
+			}
+		}
+
+		offsetMap[nodeOffset] = newOffset
+		return newOffset, nil
+	}
+	return 0, ErrUnreachable
+}
+
+func remapSortedMap(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, slot Slot) (int64, error) {
+	if err := sourceCore.SeekTo(slot.Value); err != nil {
+		return 0, err
+	}
+	var headerBytes [BTreeHeaderLength]byte
+	if err := sourceCore.Read(headerBytes[:]); err != nil {
+		return 0, err
+	}
+	header, err := BTreeHeaderFromBytes(headerBytes[:])
+	if err != nil {
+		return 0, err
+	}
+
+	remappedRoot, err := remapSortedMapNode(sourceCore, targetCore, hashSize, offsetMap, header.RootPtr)
+	if err != nil {
+		return 0, err
+	}
+
+	newOffset, err := targetCore.Length()
+	if err != nil {
+		return 0, err
+	}
+	if err := targetCore.SeekTo(newOffset); err != nil {
+		return 0, err
+	}
+	newHeader := BTreeHeader{RootPtr: remappedRoot, Size: header.Size}
+	nhb := newHeader.ToBytes()
+	if err := targetCore.Write(nhb[:]); err != nil {
+		return 0, err
+	}
+
+	return newOffset, nil
+}
+
+func remapSortedMapNode(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, nodeOffset int64) (int64, error) {
+	if mapped, ok := offsetMap[nodeOffset]; ok {
+		return mapped, nil
+	}
+
+	if err := sourceCore.SeekTo(nodeOffset); err != nil {
+		return 0, err
+	}
+	var nodeHeader [BTreeNodeHeaderSize]byte
+	if err := sourceCore.Read(nodeHeader[:]); err != nil {
+		return 0, err
+	}
+	kindInt := nodeHeader[0]
+	if kindInt > byte(BTreeKindBranch) {
+		return 0, ErrInvalidBTreeNodeKind
+	}
+	kind := BTreeNodeKind(kindInt)
+	num := nodeHeader[1]
+
+	switch kind {
+	case BTreeKindLeaf:
+		body := make([]byte, SlotLength*BTreeSlotCount)
+		if err := sourceCore.Read(body); err != nil {
+			return 0, err
+		}
+		var entries [BTreeSlotCount]Slot
+		for i := 0; i < BTreeSlotCount; i++ {
+			var sb [SlotLength]byte
+			copy(sb[:], body[i*SlotLength:i*SlotLength+SlotLength])
+			remapped, err := remapSlot(sourceCore, targetCore, hashSize, offsetMap, SlotFromBytes(sb))
+			if err != nil {
+				return 0, err
+			}
+			entries[i] = remapped
+		}
+
+		newOffset, err := targetCore.Length()
+		if err != nil {
+			return 0, err
+		}
+		if err := targetCore.SeekTo(newOffset); err != nil {
+			return 0, err
+		}
+		if err := targetCore.Write([]byte{kindInt, num}); err != nil {
+			return 0, err
+		}
+		for _, s := range entries {
+			b := s.ToBytes()
+			if err := targetCore.Write(b[:]); err != nil {
+				return 0, err
+			}
+		}
+
+		offsetMap[nodeOffset] = newOffset
+		return newOffset, nil
+	case BTreeKindBranch:
+		body := make([]byte, (SlotLength*2+8)*BTreeSlotCount)
+		if err := sourceCore.Read(body); err != nil {
+			return 0, err
+		}
+		var children [BTreeSlotCount]Slot
+		for i := 0; i < BTreeSlotCount; i++ {
+			var sb [SlotLength]byte
+			copy(sb[:], body[i*SlotLength:i*SlotLength+SlotLength])
+			child := SlotFromBytes(sb)
+			if child.Tag == TagIndex {
+				remappedPtr, err := remapSortedMapNode(sourceCore, targetCore, hashSize, offsetMap, child.Value)
+				if err != nil {
+					return 0, err
+				}
+				children[i] = Slot{Value: remappedPtr, Tag: TagIndex, Full: child.Full}
+			} else {
+				children[i] = child
+			}
+		}
+		sepOffset := SlotLength * BTreeSlotCount
+		var separators [BTreeSlotCount]Slot
+		for i := 0; i < BTreeSlotCount; i++ {
+			var sb [SlotLength]byte
+			copy(sb[:], body[sepOffset+i*SlotLength:sepOffset+i*SlotLength+SlotLength])
+			remapped, err := remapSlot(sourceCore, targetCore, hashSize, offsetMap, SlotFromBytes(sb))
+			if err != nil {
+				return 0, err
+			}
+			separators[i] = remapped
+		}
+		countsOffset := SlotLength * 2 * BTreeSlotCount
+		var counts [BTreeSlotCount]int64
+		for i := 0; i < BTreeSlotCount; i++ {
+			counts[i] = int64(binary.BigEndian.Uint64(body[countsOffset+i*8 : countsOffset+i*8+8]))
+		}
+
+		newOffset, err := targetCore.Length()
+		if err != nil {
+			return 0, err
+		}
+		if err := targetCore.SeekTo(newOffset); err != nil {
+			return 0, err
+		}
+		if err := targetCore.Write([]byte{kindInt, num}); err != nil {
+			return 0, err
+		}
+		for _, s := range children {
+			b := s.ToBytes()
+			if err := targetCore.Write(b[:]); err != nil {
+				return 0, err
+			}
+		}
+		for _, s := range separators {
 			b := s.ToBytes()
 			if err := targetCore.Write(b[:]); err != nil {
 				return 0, err

@@ -1065,6 +1065,284 @@ func (p HashMapRemovePart) readSlotPointer(db *Database, isTopLevel bool, writeM
 	return slotPtr, nil
 }
 
+// SortedMapInit
+
+type SortedMapInitPart struct {
+	Set bool
+}
+
+func (p SortedMapInitPart) readSlotPointer(db *Database, isTopLevel bool, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+	if writeMode == ReadOnly {
+		return SlotPointer{}, ErrWriteNotAllowed
+	}
+	if isTopLevel {
+		return SlotPointer{}, ErrInvalidTopLevelType
+	}
+	if slotPtr.Position == nil {
+		return SlotPointer{}, ErrCursorNotWriteable
+	}
+	position := *slotPtr.Position
+	tag := TagSortedMap
+	if p.Set {
+		tag = TagSortedSet
+	}
+
+	switch slotPtr.Slot.Tag {
+	case TagNone:
+		rootPtr, err := db.writeSortedNode(SortedNode{Kind: BTreeKindLeaf, Num: 0})
+		if err != nil {
+			return SlotPointer{}, err
+		}
+		headerPtr, err := db.Core.Length()
+		if err != nil {
+			return SlotPointer{}, err
+		}
+		if err := db.Core.SeekTo(headerPtr); err != nil {
+			return SlotPointer{}, err
+		}
+		header := BTreeHeader{RootPtr: rootPtr, Size: 0}
+		hb := header.ToBytes()
+		if err := db.Core.Write(hb[:]); err != nil {
+			return SlotPointer{}, err
+		}
+		nextSlotPtr := SlotPointer{Position: &position, Slot: Slot{Value: headerPtr, Tag: tag}}
+		if err := db.Core.SeekTo(position); err != nil {
+			return SlotPointer{}, err
+		}
+		sb := nextSlotPtr.Slot.ToBytes()
+		if err := db.Core.Write(sb[:]); err != nil {
+			return SlotPointer{}, err
+		}
+		return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr)
+
+	case TagSortedMap, TagSortedSet:
+		if slotPtr.Slot.Tag != tag {
+			return SlotPointer{}, ErrUnexpectedTag
+		}
+		headerPtr := slotPtr.Slot.Value
+		// copy the header into this transaction unless it was made in it
+		if db.TxStart != nil {
+			if headerPtr < *db.TxStart {
+				if err := db.Core.SeekTo(headerPtr); err != nil {
+					return SlotPointer{}, err
+				}
+				var headerBytes [BTreeHeaderLength]byte
+				if err := db.Core.Read(headerBytes[:]); err != nil {
+					return SlotPointer{}, err
+				}
+				newPtr, err := db.Core.Length()
+				if err != nil {
+					return SlotPointer{}, err
+				}
+				if err := db.Core.SeekTo(newPtr); err != nil {
+					return SlotPointer{}, err
+				}
+				if err := db.Core.Write(headerBytes[:]); err != nil {
+					return SlotPointer{}, err
+				}
+				headerPtr = newPtr
+			}
+		} else if db.Header.Tag == TagArrayList {
+			return SlotPointer{}, ErrExpectedTxStart
+		}
+		nextSlotPtr := SlotPointer{Position: &position, Slot: Slot{Value: headerPtr, Tag: tag}}
+		if err := db.Core.SeekTo(position); err != nil {
+			return SlotPointer{}, err
+		}
+		sb := nextSlotPtr.Slot.ToBytes()
+		if err := db.Core.Write(sb[:]); err != nil {
+			return SlotPointer{}, err
+		}
+		return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr)
+
+	default:
+		return SlotPointer{}, ErrUnexpectedTag
+	}
+}
+
+// SortedMapGet
+
+type SortedMapGetPart struct {
+	Target SortedMapGetTarget
+}
+
+func (p SortedMapGetPart) readSlotPointer(db *Database, isTopLevel bool, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+	switch slotPtr.Slot.Tag {
+	case TagNone:
+		return SlotPointer{}, ErrKeyNotFound
+	case TagSortedMap, TagSortedSet:
+	default:
+		return SlotPointer{}, ErrUnexpectedTag
+	}
+
+	key := p.Target.getKey()
+	headerPtr := slotPtr.Slot.Value
+	if err := db.Core.SeekTo(headerPtr); err != nil {
+		return SlotPointer{}, err
+	}
+	var headerBytes [BTreeHeaderLength]byte
+	if err := db.Core.Read(headerBytes[:]); err != nil {
+		return SlotPointer{}, err
+	}
+	header, err := BTreeHeaderFromBytes(headerBytes[:])
+	if err != nil {
+		return SlotPointer{}, err
+	}
+
+	if writeMode == ReadOnly {
+		found, err := db.sortedGet(header.RootPtr, key)
+		if err != nil {
+			return SlotPointer{}, err
+		}
+		if found == nil {
+			return SlotPointer{}, ErrKeyNotFound
+		}
+		targetSlot, err := db.sortedTargetSlot(found.Slot.Value, p.Target)
+		if err != nil {
+			return SlotPointer{}, err
+		}
+		return db.readSlotPointer(writeMode, path, pathI+1, targetSlot)
+	}
+
+	result, err := db.sortedPut(header.RootPtr, key)
+	if err != nil {
+		return SlotPointer{}, err
+	}
+	newRootPtr, err := db.sortedGrowRoot(result)
+	if err != nil {
+		return SlotPointer{}, err
+	}
+	kvPos := result.ValuePosition - int64(db.Header.HashSize) - SlotLength
+	targetSlot, err := db.sortedTargetSlot(kvPos, p.Target)
+	if err != nil {
+		return SlotPointer{}, err
+	}
+	finalSlotPtr, err := db.readSlotPointer(writeMode, path, pathI+1, targetSlot)
+	if err != nil {
+		return SlotPointer{}, err
+	}
+
+	if err := db.Core.SeekTo(headerPtr); err != nil {
+		return SlotPointer{}, err
+	}
+	newSize := header.Size
+	if result.Added {
+		newSize++
+	}
+	newHeader := BTreeHeader{RootPtr: newRootPtr, Size: newSize}
+	nhb := newHeader.ToBytes()
+	if err := db.Core.Write(nhb[:]); err != nil {
+		return SlotPointer{}, err
+	}
+
+	return finalSlotPtr, nil
+}
+
+// SortedMapGetIndex
+
+type SortedMapGetIndexPart struct {
+	Index int64
+}
+
+func (p SortedMapGetIndexPart) readSlotPointer(db *Database, isTopLevel bool, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+	if writeMode == ReadWrite {
+		return SlotPointer{}, ErrWriteNotAllowed
+	}
+
+	switch slotPtr.Slot.Tag {
+	case TagNone:
+		return SlotPointer{}, ErrKeyNotFound
+	case TagSortedMap, TagSortedSet:
+	default:
+		return SlotPointer{}, ErrUnexpectedTag
+	}
+
+	headerPtr := slotPtr.Slot.Value
+	if err := db.Core.SeekTo(headerPtr); err != nil {
+		return SlotPointer{}, err
+	}
+	var headerBytes [BTreeHeaderLength]byte
+	if err := db.Core.Read(headerBytes[:]); err != nil {
+		return SlotPointer{}, err
+	}
+	header, err := BTreeHeaderFromBytes(headerBytes[:])
+	if err != nil {
+		return SlotPointer{}, err
+	}
+
+	index := p.Index
+	if index >= header.Size || index < -header.Size {
+		return SlotPointer{}, ErrKeyNotFound
+	}
+	var rank int64
+	if index < 0 {
+		rank = header.Size - int64(math.Abs(float64(index)))
+	} else {
+		rank = index
+	}
+
+	found, err := db.sortedGetByIndex(header.RootPtr, rank)
+	if err != nil {
+		return SlotPointer{}, err
+	}
+	// return the kv_pair entry so the caller can read key and value
+	pos := found.Position
+	targetSlot := SlotPointer{Position: &pos, Slot: found.Slot}
+	return db.readSlotPointer(writeMode, path, pathI+1, targetSlot)
+}
+
+// SortedMapRemove
+
+type SortedMapRemovePart struct {
+	Key []byte
+}
+
+func (p SortedMapRemovePart) readSlotPointer(db *Database, isTopLevel bool, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+	if writeMode == ReadOnly {
+		return SlotPointer{}, ErrWriteNotAllowed
+	}
+
+	switch slotPtr.Slot.Tag {
+	case TagNone:
+		return SlotPointer{}, ErrKeyNotFound
+	case TagSortedMap, TagSortedSet:
+	default:
+		return SlotPointer{}, ErrUnexpectedTag
+	}
+
+	headerPtr := slotPtr.Slot.Value
+	if err := db.Core.SeekTo(headerPtr); err != nil {
+		return SlotPointer{}, err
+	}
+	var headerBytes [BTreeHeaderLength]byte
+	if err := db.Core.Read(headerBytes[:]); err != nil {
+		return SlotPointer{}, err
+	}
+	header, err := BTreeHeaderFromBytes(headerBytes[:])
+	if err != nil {
+		return SlotPointer{}, err
+	}
+
+	result, err := db.sortedRemove(header.RootPtr, p.Key)
+	if err != nil {
+		return SlotPointer{}, err
+	}
+	if !result.Found {
+		return SlotPointer{}, ErrKeyNotFound
+	}
+
+	if err := db.Core.SeekTo(headerPtr); err != nil {
+		return SlotPointer{}, err
+	}
+	newHeader := BTreeHeader{RootPtr: result.NodePtr, Size: header.Size - 1}
+	nhb := newHeader.ToBytes()
+	if err := db.Core.Write(nhb[:]); err != nil {
+		return SlotPointer{}, err
+	}
+
+	return slotPtr, nil
+}
+
 // WriteData
 
 type WriteData struct {

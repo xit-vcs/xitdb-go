@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"io"
+	"iter"
 	"os"
 	"strconv"
 	"testing"
@@ -2184,6 +2185,41 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 					return err
 				}
 
+				// SortedMap
+				sortedCursor, err := moment.PutCursor("sorted")
+				if err != nil {
+					return err
+				}
+				sorted, err := NewWriteSortedMap(sortedCursor)
+				if err != nil {
+					return err
+				}
+				if err := sorted.Put("apple", NewUint(1)); err != nil {
+					return err
+				}
+				if err := sorted.Put("banana", NewUint(2)); err != nil {
+					return err
+				}
+				if err := sorted.Put("cherry", NewUint(3)); err != nil {
+					return err
+				}
+
+				// SortedSet
+				sortedSetCursor, err := moment.PutCursor("sortedset")
+				if err != nil {
+					return err
+				}
+				sortedSet, err := NewWriteSortedSet(sortedSetCursor)
+				if err != nil {
+					return err
+				}
+				if err := sortedSet.Put("foo"); err != nil {
+					return err
+				}
+				if err := sortedSet.Put("bar"); err != nil {
+					return err
+				}
+
 				return nil
 			})
 			if err != nil {
@@ -2447,6 +2483,79 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			t.Fatal(err)
 		}
 		assertEqual(t, "p", string(pValue))
+
+		// SortedMap
+		sortedCursor, err := moment.GetCursor("sorted")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sorted, err := NewReadSortedMap(sortedCursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sortedCount, err := sorted.Count()
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertEqual(t, int64(3), sortedCount)
+		bananaCursor, err := sorted.GetCursor("banana")
+		if err != nil {
+			t.Fatal(err)
+		}
+		bananaValue, err := bananaCursor.ReadUint()
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertEqual(t, uint64(2), bananaValue)
+		// lexicographic order is preserved across compaction
+		firstKv, err := sorted.GetIndexKeyValuePair(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		firstKey, err := firstKv.KeyCursor.ReadBytes(maxRead)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertEqual(t, "apple", string(firstKey))
+		lastKv, err := sorted.GetIndexKeyValuePair(-1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lastKey, err := lastKv.KeyCursor.ReadBytes(maxRead)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertEqual(t, "cherry", string(lastKey))
+
+		// SortedSet
+		sortedSetCursor, err := moment.GetCursor("sortedset")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sortedSet, err := NewReadSortedSet(sortedSetCursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sortedSetCount, err := sortedSet.Count()
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertEqual(t, int64(2), sortedSetCount)
+		hasFoo, err := sortedSet.Contains("foo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertEqual(t, true, hasFoo)
+		hasBar, err := sortedSet.Contains("bar")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertEqual(t, true, hasBar)
+		hasBaz, err := sortedSet.Contains("baz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertEqual(t, false, hasBaz)
 	}
 
 	// structural sharing
@@ -2770,4 +2879,501 @@ func mustSetLength(t *testing.T, core Core, length int64) {
 
 func itoa(i int) string {
 	return strconv.Itoa(i)
+}
+
+func TestSortedMap(t *testing.T) {
+	// CoreMemory
+	{
+		testSortedMap(t, NewCoreMemory(), sha1Hasher())
+	}
+	// CoreFile
+	{
+		f, err := os.CreateTemp("", "database")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(f.Name())
+		defer f.Close()
+		testSortedMap(t, NewCoreFile(f), sha1Hasher())
+	}
+	// CoreBufferedFile
+	{
+		f, err := os.CreateTemp("", "database")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(f.Name())
+		defer f.Close()
+		testSortedMap(t, NewCoreBufferedFileWithSize(f, 1024), sha1Hasher())
+	}
+}
+
+func testSortedMap(t *testing.T, core Core, hasher Hasher) {
+	t.Helper()
+	maxRead := int64(1024)
+	if err := core.SetLength(0); err != nil {
+		t.Fatal(err)
+	}
+	db, err := NewDatabase(core, hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// keys "k0000".."k0059" sort lexicographically in numeric order
+	const count = 60
+	k := func(i int) string {
+		s := strconv.Itoa(i)
+		for len(s) < 4 {
+			s = "0" + s
+		}
+		return "k" + s
+	}
+
+	// the first key yielded by a ranged iterator
+	firstKey := func(seq iter.Seq2[*ReadCursor, error]) (string, error) {
+		for c, err := range seq {
+			if err != nil {
+				return "", err
+			}
+			kv, err := c.ReadKeyValuePair()
+			if err != nil {
+				return "", err
+			}
+			b, err := kv.KeyCursor.ReadBytes(maxRead)
+			if err != nil {
+				return "", err
+			}
+			return string(b), nil
+		}
+		return "", nil
+	}
+
+	{
+		history, err := NewWriteArrayList(db.RootCursor())
+		if err != nil {
+			t.Fatal(err)
+		}
+		lastSlot, err := history.GetSlot(-1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = history.AppendContext(lastSlot, func(cursor *WriteCursor) error {
+			moment, err := NewWriteHashMap(cursor)
+			if err != nil {
+				return err
+			}
+			mapCursor, err := moment.PutCursor("map")
+			if err != nil {
+				return err
+			}
+			m, err := NewWriteSortedMap(mapCursor)
+			if err != nil {
+				return err
+			}
+
+			// insert in reverse order to exercise front-insertions and splits
+			for i := count; i > 0; {
+				i--
+				if err := m.Put(k(i), NewUint(uint64(i))); err != nil {
+					return err
+				}
+			}
+			if c, err := m.Count(); err != nil {
+				return err
+			} else {
+				assertEqual(t, int64(count), c)
+			}
+
+			// dedup: re-putting an existing key replaces the value, not the count
+			if err := m.Put("k0005", NewUint(999)); err != nil {
+				return err
+			}
+			if c, err := m.Count(); err != nil {
+				return err
+			} else {
+				assertEqual(t, int64(count), c)
+			}
+			cur, err := m.GetCursor("k0005")
+			if err != nil {
+				return err
+			}
+			v, err := cur.ReadUint()
+			if err != nil {
+				return err
+			}
+			assertEqual(t, uint64(999), v)
+			if err := m.Put("k0005", NewUint(5)); err != nil {
+				return err
+			}
+
+			// ordered iteration yields k0000..k0059 with intact values
+			n := 0
+			for c, err := range m.All() {
+				if err != nil {
+					return err
+				}
+				kv, err := c.ReadKeyValuePair()
+				if err != nil {
+					return err
+				}
+				keyBytes, err := kv.KeyCursor.ReadBytes(maxRead)
+				if err != nil {
+					return err
+				}
+				assertEqual(t, k(n), string(keyBytes))
+				val, err := kv.ValueCursor.ReadUint()
+				if err != nil {
+					return err
+				}
+				assertEqual(t, uint64(n), val)
+				n++
+			}
+			assertEqual(t, count, n)
+
+			c42, err := m.GetCursor("k0042")
+			if err != nil {
+				return err
+			}
+			if c42 == nil {
+				t.Fatal("k0042 should be present")
+			}
+			cNope, err := m.GetCursor("nope")
+			if err != nil {
+				return err
+			}
+			if cNope != nil {
+				t.Fatal("nope should be absent")
+			}
+
+			// getByIndex (positive and negative) and rank are inverses
+			for idx := 0; idx < count; idx++ {
+				kv, err := m.GetIndexKeyValuePair(int64(idx))
+				if err != nil {
+					return err
+				}
+				keyBytes, err := kv.KeyCursor.ReadBytes(maxRead)
+				if err != nil {
+					return err
+				}
+				assertEqual(t, k(idx), string(keyBytes))
+				r, err := m.RankByBytes(keyBytes)
+				if err != nil {
+					return err
+				}
+				assertEqual(t, int64(idx), r)
+			}
+			lastKv, err := m.GetIndexKeyValuePair(-1)
+			if err != nil {
+				return err
+			}
+			lastKey, err := lastKv.KeyCursor.ReadBytes(maxRead)
+			if err != nil {
+				return err
+			}
+			assertEqual(t, "k0059", string(lastKey))
+			outKv, err := m.GetIndexKeyValuePair(count)
+			if err != nil {
+				return err
+			}
+			if outKv != nil {
+				t.Fatal("index == count should be absent")
+			}
+
+			// lower-bound iteration from a present and an absent key
+			if s, err := firstKey(m.IteratorFrom([]byte("k0030"))); err != nil {
+				return err
+			} else {
+				assertEqual(t, "k0030", s)
+			}
+			// "k00095" sorts between "k0009" and "k0010"
+			if s, err := firstKey(m.IteratorFrom([]byte("k00095"))); err != nil {
+				return err
+			} else {
+				assertEqual(t, "k0010", s)
+			}
+			if s, err := firstKey(m.IteratorFromIndex(count - 2)); err != nil {
+				return err
+			} else {
+				assertEqual(t, "k0058", s)
+			}
+
+			// remove the even keys, then re-verify order, count, and presence
+			for j := 0; j < count; j += 2 {
+				ok, err := m.Remove(k(j))
+				if err != nil {
+					return err
+				}
+				assertEqual(t, true, ok)
+			}
+			if c, err := m.Count(); err != nil {
+				return err
+			} else {
+				assertEqual(t, int64(count/2), c)
+			}
+			gone, err := m.Remove("k0000")
+			if err != nil {
+				return err
+			}
+			assertEqual(t, false, gone)
+
+			expectI := 1
+			seen := 0
+			for c, err := range m.All() {
+				if err != nil {
+					return err
+				}
+				kv, err := c.ReadKeyValuePair()
+				if err != nil {
+					return err
+				}
+				b, err := kv.KeyCursor.ReadBytes(maxRead)
+				if err != nil {
+					return err
+				}
+				assertEqual(t, k(expectI), string(b))
+				expectI += 2
+				seen++
+			}
+			assertEqual(t, count/2, seen)
+
+			// iterating-from on an unwritten (none) map yields nothing
+			noneCursor := &ReadCursor{SlotPtr: SlotPointer{Position: nil, Slot: Slot{}}, DB: db}
+			empty, err := NewReadSortedMap(noneCursor)
+			if err != nil {
+				return err
+			}
+			emptyCount := 0
+			for range empty.IteratorFrom([]byte("anything")) {
+				emptyCount++
+			}
+			for range empty.IteratorFromIndex(0) {
+				emptyCount++
+			}
+			assertEqual(t, 0, emptyCount)
+
+			// SortedSet with mixed short (inline) and long (external) keys
+			setCursor, err := moment.PutCursor("set")
+			if err != nil {
+				return err
+			}
+			set, err := NewWriteSortedSet(setCursor)
+			if err != nil {
+				return err
+			}
+			if err := set.Put("short"); err != nil {
+				return err
+			}
+			if err := set.Put("a-much-longer-key-stored-externally"); err != nil {
+				return err
+			}
+			if err := set.Put("mid"); err != nil {
+				return err
+			}
+			if err := set.Put("short"); err != nil { // dup is a no-op
+				return err
+			}
+			if c, err := set.Count(); err != nil {
+				return err
+			} else {
+				assertEqual(t, int64(3), c)
+			}
+			if ok, err := set.Contains("mid"); err != nil {
+				return err
+			} else {
+				assertEqual(t, true, ok)
+			}
+			if ok, err := set.Contains("nope"); err != nil {
+				return err
+			} else {
+				assertEqual(t, false, ok)
+			}
+			want := []string{"a-much-longer-key-stored-externally", "mid", "short"}
+			sn := 0
+			for c, err := range set.All() {
+				if err != nil {
+					return err
+				}
+				kv, err := c.ReadKeyValuePair()
+				if err != nil {
+					return err
+				}
+				b, err := kv.KeyCursor.ReadBytes(maxRead)
+				if err != nil {
+					return err
+				}
+				assertEqual(t, want[sn], string(b))
+				sn++
+			}
+			assertEqual(t, 3, sn)
+			if ok, err := set.Remove("mid"); err != nil {
+				return err
+			} else {
+				assertEqual(t, true, ok)
+			}
+			if c, err := set.Count(); err != nil {
+				return err
+			} else {
+				assertEqual(t, int64(2), c)
+			}
+
+			// immutability guards: positional access is read-only, and keys/entries
+			// cannot be overwritten through the low-level path API
+			if _, err := m.writeCursor.WritePath([]PathPart{SortedMapGetIndexPart{Index: 0}}); err != ErrWriteNotAllowed {
+				t.Fatalf("expected ErrWriteNotAllowed, got %v", err)
+			}
+			if _, err := m.writeCursor.WritePath([]PathPart{
+				SortedMapGetPart{Target: SortedMapGetKey{Key: []byte("k0001")}},
+				WriteData{Data: NewBytes([]byte("x"))},
+			}); err != ErrCursorNotWriteable {
+				t.Fatalf("expected ErrCursorNotWriteable, got %v", err)
+			}
+
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// the map persists in the committed moment
+	{
+		history, err := NewReadArrayList(db.RootCursor().ReadCursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		momentCursor, err := history.GetCursor(-1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		moment, err := NewReadHashMap(momentCursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mapCursor, err := moment.GetCursor("map")
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, err := NewReadSortedMap(mapCursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c, err := m.Count(); err != nil {
+			t.Fatal(err)
+		} else {
+			assertEqual(t, int64(count/2), c)
+		}
+		kv, err := m.GetIndexKeyValuePair(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := kv.KeyCursor.ReadBytes(maxRead)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertEqual(t, "k0001", string(b))
+	}
+
+	// a second moment that inherits and mutates the map must not disturb the first
+	{
+		history, err := NewWriteArrayList(db.RootCursor())
+		if err != nil {
+			t.Fatal(err)
+		}
+		lastSlot, err := history.GetSlot(-1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = history.AppendContext(lastSlot, func(cursor *WriteCursor) error {
+			moment, err := NewWriteHashMap(cursor)
+			if err != nil {
+				return err
+			}
+			mapCursor, err := moment.PutCursor("map")
+			if err != nil {
+				return err
+			}
+			m, err := NewWriteSortedMap(mapCursor)
+			if err != nil {
+				return err
+			}
+			if ok, err := m.Remove("k0001"); err != nil {
+				return err
+			} else {
+				assertEqual(t, true, ok)
+			}
+			return m.Put("k0001", NewUint(7)) // not in moment 0
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	{
+		history, err := NewReadArrayList(db.RootCursor().ReadCursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// moment 0 (original) is unchanged: k0001 still present with value 1
+		m0Cursor, err := history.GetCursor(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m0, err := NewReadHashMap(m0Cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		map0Cursor, err := m0.GetCursor("map")
+		if err != nil {
+			t.Fatal(err)
+		}
+		map0, err := NewReadSortedMap(map0Cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c, err := map0.Count(); err != nil {
+			t.Fatal(err)
+		} else {
+			assertEqual(t, int64(count/2), c)
+		}
+		c0, err := map0.GetCursor("k0001")
+		if err != nil {
+			t.Fatal(err)
+		}
+		v0, err := c0.ReadUint()
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertEqual(t, uint64(1), v0)
+
+		// moment 1 reflects the mutation: k0001 re-added with value 7
+		m1Cursor, err := history.GetCursor(1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m1, err := NewReadHashMap(m1Cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		map1Cursor, err := m1.GetCursor("map")
+		if err != nil {
+			t.Fatal(err)
+		}
+		map1, err := NewReadSortedMap(map1Cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c, err := map1.Count(); err != nil {
+			t.Fatal(err)
+		} else {
+			assertEqual(t, int64(count/2), c)
+		}
+		c1, err := map1.GetCursor("k0001")
+		if err != nil {
+			t.Fatal(err)
+		}
+		v1, err := c1.ReadUint()
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertEqual(t, uint64(7), v1)
+	}
 }

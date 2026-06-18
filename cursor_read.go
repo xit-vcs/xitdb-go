@@ -323,7 +323,7 @@ func (c *ReadCursor) Count() (int64, error) {
 			return 0, err
 		}
 		return header.Size, nil
-	case TagLinkedArrayList:
+	case TagLinkedArrayList, TagSortedMap, TagSortedSet:
 		if err := c.DB.Core.SeekTo(c.SlotPtr.Slot.Value); err != nil {
 			return 0, err
 		}
@@ -415,7 +415,7 @@ func newCursorIterator(cursor *ReadCursor) (*CursorIterator, error) {
 			return nil, err
 		}
 		it.stack = []iterLevel{level}
-	case TagLinkedArrayList:
+	case TagLinkedArrayList, TagSortedMap, TagSortedSet:
 		// backed by a b-tree: read the header, then walk from the root node's
 		// value/child slots (skipping its kind+num header)
 		position := cursor.SlotPtr.Slot.Value
@@ -555,7 +555,7 @@ func (c *ReadCursor) All() iter.Seq2[*ReadCursor, error] {
 					}
 				}
 			}
-		case TagLinkedArrayList:
+		case TagLinkedArrayList, TagSortedMap, TagSortedSet:
 			for it.index < it.size {
 				it.index++
 				// b-tree nodes have a kind+num header before their slots, so child
@@ -585,6 +585,173 @@ func (c *ReadCursor) All() iter.Seq2[*ReadCursor, error] {
 				if cursor == nil {
 					return
 				}
+				if !yield(cursor, nil) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// Sorted-map ranged iteration
+
+func sortedRootPtr(cursor *ReadCursor) (int64, error) {
+	switch cursor.SlotPtr.Slot.Tag {
+	case TagSortedMap, TagSortedSet:
+	default:
+		return 0, ErrUnexpectedTag
+	}
+	if err := cursor.DB.Core.SeekTo(cursor.SlotPtr.Slot.Value); err != nil {
+		return 0, err
+	}
+	var headerBytes [BTreeHeaderLength]byte
+	if err := cursor.DB.Core.Read(headerBytes[:]); err != nil {
+		return 0, err
+	}
+	header, err := BTreeHeaderFromBytes(headerBytes[:])
+	if err != nil {
+		return 0, err
+	}
+	return header.RootPtr, nil
+}
+
+func sortedStackFromIndex(cursor *ReadCursor, rootPtr int64, startIndex int64) ([]iterLevel, error) {
+	var stack []iterLevel
+	nodePtr := rootPtr
+	rem := startIndex
+	for {
+		node, err := cursor.DB.readSortedNode(nodePtr)
+		if err != nil {
+			return nil, err
+		}
+		position := nodePtr + BTreeNodeHeaderSize
+		if node.Kind == BTreeKindLeaf {
+			stack = append(stack, iterLevel{position: position, block: node.Entries, index: byte(rem)})
+			return stack, nil
+		}
+		i := 0
+		for i+1 < node.Num && rem >= node.Counts[i] {
+			rem -= node.Counts[i]
+			i++
+		}
+		stack = append(stack, iterLevel{position: position, block: node.Children, index: byte(i)})
+		nodePtr = node.Children[i].Value
+	}
+}
+
+func sortedStackFromKey(cursor *ReadCursor, rootPtr int64, key []byte) ([]iterLevel, int64, error) {
+	var stack []iterLevel
+	nodePtr := rootPtr
+	var before int64
+	for {
+		node, err := cursor.DB.readSortedNode(nodePtr)
+		if err != nil {
+			return nil, 0, err
+		}
+		position := nodePtr + BTreeNodeHeaderSize
+		if node.Kind == BTreeKindLeaf {
+			li := node.Num
+			for j := 0; j < node.Num; j++ {
+				kv, err := cursor.DB.readKvPair(node.Entries[j])
+				if err != nil {
+					return nil, 0, err
+				}
+				c, err := cursor.DB.compareKey(kv.KeySlot, key)
+				if err != nil {
+					return nil, 0, err
+				}
+				if c >= 0 {
+					li = j
+					break
+				}
+			}
+			before += int64(li)
+			stack = append(stack, iterLevel{position: position, block: node.Entries, index: byte(li)})
+			return stack, before, nil
+		}
+		i := 0
+		for i+1 < node.Num {
+			c, err := cursor.DB.compareKey(node.Separators[i+1], key)
+			if err != nil {
+				return nil, 0, err
+			}
+			if c <= 0 {
+				before += node.Counts[i]
+				i++
+			} else {
+				break
+			}
+		}
+		stack = append(stack, iterLevel{position: position, block: node.Children, index: byte(i)})
+		nodePtr = node.Children[i].Value
+	}
+}
+
+// start a sorted-map iterator at the entry with rank startIndex (the count descent),
+// iterating in key order from there
+func newSortedIterFromIndex(cursor *ReadCursor, startIndex int64) (*CursorIterator, error) {
+	it := &CursorIterator{cursor: cursor}
+	total, err := cursor.Count()
+	if err != nil {
+		return nil, err
+	}
+	// an unwritten map is none (like All()): yield nothing
+	if cursor.SlotPtr.Slot.Tag == TagNone || startIndex >= total {
+		return it, nil
+	}
+	rootPtr, err := sortedRootPtr(cursor)
+	if err != nil {
+		return nil, err
+	}
+	stack, err := sortedStackFromIndex(cursor, rootPtr, startIndex)
+	if err != nil {
+		return nil, err
+	}
+	it.size = total
+	it.index = startIndex
+	it.stack = stack
+	return it, nil
+}
+
+// start a sorted-map iterator at the first entry with key >= startKey
+func newSortedIterFromKey(cursor *ReadCursor, startKey []byte) (*CursorIterator, error) {
+	it := &CursorIterator{cursor: cursor}
+	if cursor.SlotPtr.Slot.Tag == TagNone {
+		return it, nil
+	}
+	total, err := cursor.Count()
+	if err != nil {
+		return nil, err
+	}
+	rootPtr, err := sortedRootPtr(cursor)
+	if err != nil {
+		return nil, err
+	}
+	stack, before, err := sortedStackFromKey(cursor, rootPtr, startKey)
+	if err != nil {
+		return nil, err
+	}
+	it.size = total
+	it.index = before
+	it.stack = stack
+	return it, nil
+}
+
+func sortedIterSeq(newIt func() (*CursorIterator, error)) iter.Seq2[*ReadCursor, error] {
+	return func(yield func(*ReadCursor, error) bool) {
+		it, err := newIt()
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		for it.index < it.size {
+			it.index++
+			cursor, err := it.nextInternal(BTreeNodeHeaderSize)
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			if cursor != nil {
 				if !yield(cursor, nil) {
 					return
 				}
