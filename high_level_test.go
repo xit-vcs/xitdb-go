@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha1"
+	"encoding/binary"
 	"io"
 	"iter"
 	"os"
@@ -1952,6 +1953,184 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			t.Fatal(err)
 		}
 		assertEqual(t, int64(2), bigCitiesCount)
+	}
+
+	// build a secondary index with a SortedMap to sort and paginate,
+	// like the "Sorting and Paginating" section of the readme
+	{
+		history, err := NewWriteArrayList(db.RootCursor())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		type post struct {
+			id        string
+			title     string
+			createdTs uint64
+		}
+
+		// post ids are fixed-length so the timestamp tie-breaker stays aligned
+		newPosts := []post{
+			{id: "post000000000001", title: "Hello, world", createdTs: 1_700_000_000},
+			{id: "post000000000002", title: "Second post", createdTs: 1_700_000_500},
+			{id: "post000000000003", title: "Third post", createdTs: 1_700_001_000},
+		}
+
+		// build a SortedMap key that sorts by creation time. the big-endian
+		// timestamp makes byte order match chronological order; the post id is
+		// appended so two posts with the same timestamp still get distinct keys.
+		orderKey := func(timestamp uint64, postID []byte) []byte {
+			key := make([]byte, 8+len(postID))
+			binary.BigEndian.PutUint64(key[:8], timestamp)
+			copy(key[8:], postID)
+			return key
+		}
+
+		lastSlot, err := history.GetSlot(-1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = history.AppendContext(lastSlot, func(cursor *WriteCursor) error {
+			moment, err := NewWriteHashMap(cursor)
+			if err != nil {
+				return err
+			}
+
+			// the primary store: a HashMap from post id to the post's fields
+			idToPostCursor, err := moment.PutCursor("id->post")
+			if err != nil {
+				return err
+			}
+			idToPost, err := NewWriteHashMap(idToPostCursor)
+			if err != nil {
+				return err
+			}
+
+			// the secondary index: a SortedMap ordered by creation time
+			createdTsToPostIDCursor, err := moment.PutCursor("created-ts->post-id")
+			if err != nil {
+				return err
+			}
+			createdTsToPostID, err := NewWriteSortedMap(createdTsToPostIDCursor)
+			if err != nil {
+				return err
+			}
+
+			for _, p := range newPosts {
+				postCursor, err := idToPost.PutCursor(p.id)
+				if err != nil {
+					return err
+				}
+				postMap, err := NewWriteHashMap(postCursor)
+				if err != nil {
+					return err
+				}
+				if err := postMap.Put("title", NewString(p.title)); err != nil {
+					return err
+				}
+				if err := postMap.Put("created-ts", NewUint(p.createdTs)); err != nil {
+					return err
+				}
+
+				if err := createdTsToPostID.PutByBytes(orderKey(p.createdTs, []byte(p.id)), NewString(p.id)); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		momentCursor, err := history.GetCursor(-1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		moment, err := NewReadHashMap(momentCursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		idToPostCursor, err := moment.GetCursor("id->post")
+		if err != nil {
+			t.Fatal(err)
+		}
+		idToPost, err := NewReadHashMap(idToPostCursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		createdTsToPostIDCursor, err := moment.GetCursor("created-ts->post-id")
+		if err != nil {
+			t.Fatal(err)
+		}
+		createdTsToPostID, err := NewReadSortedMap(createdTsToPostIDCursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		count, err := createdTsToPostID.Count()
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertEqual(t, int64(len(newPosts)), count)
+
+		// page through the index two at a time, oldest first, and check we get
+		// every post back in creation order
+		pageSize := int64(2)
+		expectedTitles := []string{"Hello, world", "Second post", "Third post"}
+
+		seen := 0
+		for after := int64(0); after < count; after += pageSize {
+			end := after + pageSize
+			if end > count {
+				end = count
+			}
+			// seek straight to the start of the page, then walk forward
+			i := after
+			for idCursor, err := range createdTsToPostID.IteratorFromIndex(after) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if i >= end {
+					break
+				}
+
+				idKv, err := idCursor.ReadKeyValuePair()
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				// the index entry's value is the post id; use it to read the
+				// full post out of the primary map
+				postIDBytes, err := idKv.ValueCursor.ReadBytes(maxRead)
+				if err != nil {
+					t.Fatal(err)
+				}
+				postID := string(postIDBytes)
+
+				postCursor, err := idToPost.GetCursor(postID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				postMap, err := NewReadHashMap(postCursor)
+				if err != nil {
+					t.Fatal(err)
+				}
+				titleCursor, err := postMap.GetCursor("title")
+				if err != nil {
+					t.Fatal(err)
+				}
+				titleBytes, err := titleCursor.ReadBytes(maxRead)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertEqual(t, expectedTitles[seen], string(titleBytes))
+				seen += 1
+				i += 1
+			}
+		}
+		assertEqual(t, len(newPosts), seen)
 	}
 }
 
