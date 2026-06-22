@@ -24,6 +24,7 @@ This database was originally made for the [xit version control system](https://g
 * [Initializing a Database](#initializing-a-database)
 * [Types](#types)
 * [Cloning and Undoing](#cloning-and-undoing)
+* [Sorting and Paginating](#sorting-and-paginating)
 * [Large Byte Arrays](#large-byte-arrays)
 * [Iterators](#iterators)
 * [Hashing](#hashing)
@@ -574,6 +575,199 @@ if err != nil {
 fmt.Println(bigCitiesCount) // 2
 ```
 
+## Sorting and Paginating
+
+The `Hash`-based structures are great for looking data up by key, but they store their contents in hash order, which is meaningless to a human. You may need to display data in a sensible order (like newest posts first or users by signup date) and show it one page at a time. Relational databases like SQLite have this built-in: you declare a `CREATE INDEX`, write `ORDER BY created_ts LIMIT 20 OFFSET 40`, and the query planner maintains the index and seeks into it for you.
+
+In xitdb there are no built-in indexes, so you build and maintain them yourself. That's a little more code, but the index is just another data structure: a `SortedMap` whose keys are crafted to sort the way you want. You keep it in sync by writing to it in the same transaction that writes the primary data.
+
+Let's model the storage a basic blog would need: a collection of posts we look up by id, plus a secondary index that lets us list them oldest-first with pagination. The primary store is a `HashMap` from post id to the post's fields (like a row keyed by its primary key). The secondary index is a `SortedMap` keyed by creation time, whose value is the post id to look up.
+
+The trick is the key. A `SortedMap` orders its keys lexicographically by their raw bytes, so we encode the timestamp as a big-endian integer (so byte order matches chronological order) and append the post id to break ties between posts created in the same second and keep every key unique:
+
+```go
+// build a SortedMap key that sorts by creation time. the big-endian
+// timestamp makes byte order match chronological order; the post id is
+// appended so two posts with the same timestamp still get distinct keys.
+func orderKey(timestamp uint64, postID []byte) []byte {
+    key := make([]byte, 8+len(postID))
+    binary.BigEndian.PutUint64(key[:8], timestamp)
+    copy(key[8:], postID)
+    return key
+}
+```
+
+Now we write some posts. On each insert we write the post into the primary map and add an entry to the secondary index (keeping both in sync is your job, not the database's):
+
+```go
+type Post struct {
+    ID        string
+    Title     string
+    CreatedTs uint64
+}
+
+// post ids are fixed-length so the timestamp tie-breaker stays aligned
+newPosts := []Post{
+    {ID: "post000000000001", Title: "Hello, world", CreatedTs: 1_700_000_000},
+    {ID: "post000000000002", Title: "Second post", CreatedTs: 1_700_000_500},
+    {ID: "post000000000003", Title: "Third post", CreatedTs: 1_700_001_000},
+}
+
+lastSlot, err := history.GetSlot(-1)
+if err != nil {
+    log.Fatal(err)
+}
+err = history.AppendContext(lastSlot, func(cursor *xitdb.WriteCursor) error {
+    moment, err := xitdb.NewWriteHashMap(cursor)
+    if err != nil {
+        return err
+    }
+
+    // the primary store: a HashMap from post id to the post's fields
+    idToPostCursor, err := moment.PutCursor("id->post")
+    if err != nil {
+        return err
+    }
+    idToPost, err := xitdb.NewWriteHashMap(idToPostCursor)
+    if err != nil {
+        return err
+    }
+
+    // the secondary index: a SortedMap ordered by creation time. there's
+    // no CREATE INDEX here, so we maintain it ourselves on every write.
+    createdTsToPostIDCursor, err := moment.PutCursor("created-ts->post-id")
+    if err != nil {
+        return err
+    }
+    createdTsToPostID, err := xitdb.NewWriteSortedMap(createdTsToPostIDCursor)
+    if err != nil {
+        return err
+    }
+
+    for _, post := range newPosts {
+        // write the post into the primary map under its id
+        postCursor, err := idToPost.PutCursor(post.ID)
+        if err != nil {
+            return err
+        }
+        postMap, err := xitdb.NewWriteHashMap(postCursor)
+        if err != nil {
+            return err
+        }
+        if err := postMap.Put("title", xitdb.NewString(post.Title)); err != nil {
+            return err
+        }
+        if err := postMap.Put("created-ts", xitdb.NewUint(post.CreatedTs)); err != nil {
+            return err
+        }
+
+        // add an entry to the secondary index. the key sorts by time,
+        // and the value is the post id we'll use to look the post back up.
+        if err := createdTsToPostID.PutByBytes(orderKey(post.CreatedTs, []byte(post.ID)), xitdb.NewString(post.ID)); err != nil {
+            return err
+        }
+    }
+    return nil
+})
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+To display a page, we walk the `SortedMap` instead of the `HashMap`. A web app would take a `pageSize` and an `after` offset from the request (something like `/posts?after=20`), so this is the xitdb equivalent of `ORDER BY created_ts LIMIT pageSize OFFSET after`:
+
+```go
+momentCursor, err := history.GetCursor(-1)
+if err != nil {
+    log.Fatal(err)
+}
+moment, err := xitdb.NewReadHashMap(momentCursor)
+if err != nil {
+    log.Fatal(err)
+}
+
+idToPostCursor, err := moment.GetCursor("id->post")
+if err != nil {
+    log.Fatal(err)
+}
+idToPost, err := xitdb.NewReadHashMap(idToPostCursor)
+if err != nil {
+    log.Fatal(err)
+}
+
+createdTsToPostIDCursor, err := moment.GetCursor("created-ts->post-id")
+if err != nil {
+    log.Fatal(err)
+}
+createdTsToPostID, err := xitdb.NewReadSortedMap(createdTsToPostIDCursor)
+if err != nil {
+    log.Fatal(err)
+}
+
+// a web request would supply these; here we just grab the first page
+pageSize := int64(2)
+after := int64(0)
+
+count, err := createdTsToPostID.Count()
+if err != nil {
+    log.Fatal(err)
+}
+end := after + pageSize
+if end > count {
+    end = count
+}
+
+// seek straight to the start of the page, then walk forward one entry at a
+// time. because SortedMap is a count-augmented B+tree, IteratorFromIndex
+// finds rank `after` in O(log n) without scanning the entries it skips, so
+// jumping to page 500 is just as cheap as page 1.
+i := after
+for idCursor, err := range createdTsToPostID.IteratorFromIndex(after) {
+    if err != nil {
+        log.Fatal(err)
+    }
+    if i >= end {
+        break
+    }
+
+    idKv, err := idCursor.ReadKeyValuePair()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // the index entry's value is the post id; use it to read the
+    // full post out of the primary map
+    postIDBytes, err := idKv.ValueCursor.ReadBytes(1024)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    postCursor, err := idToPost.GetCursor(string(postIDBytes))
+    if err != nil {
+        log.Fatal(err)
+    }
+    postMap, err := xitdb.NewReadHashMap(postCursor)
+    if err != nil {
+        log.Fatal(err)
+    }
+    titleCursor, err := postMap.GetCursor("title")
+    if err != nil {
+        log.Fatal(err)
+    }
+    title, err := titleCursor.ReadBytes(1024)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // a real app would render this into the page's HTML
+    fmt.Println(string(title))
+
+    i++
+}
+```
+
+This works for any ordering you need: sort by a username with a string key, by score with a big-endian integer key, or build several `SortedMap` indexes over the same primary `HashMap` to offer the data in different orders. With xitdb you "bring your own index". It takes a bit more effort than the declarative convenience of SQL databases, but it gives you more explicit control, and avoids the common problem in SQL where queries silently become inefficient due to not using indexes. In xitdb, inefficiency is hard to miss because you are always writing your queries as imperative code and the indexes are always explicit.
+
 ## Large Byte Arrays
 
 When reading and writing large byte arrays, you probably don't want to have all of their contents in memory at once. To incrementally write to a byte array, just get a writer from a cursor:
@@ -688,6 +882,8 @@ for personCursor, err := range people.All() {
 The above code iterates over `people`, which is an `ArrayList`, and for each person (which is a `HashMap`), it iterates over each of its key-value pairs.
 
 The iteration of the `HashMap` looks the same with `HashSet`, `CountedHashMap`, and `CountedHashSet`. When iterating, you call `ReadKeyValuePair` on the cursor and can read the `KeyCursor` and `ValueCursor` from it. In maps, `Put` sets the key and value. In sets, `Put` only sets the key; the value will always have a tag type of `TagNone`.
+
+Unlike the other structures, `SortedMap` and `SortedSet` keep their keys in order, so besides `All` they also offer `IteratorFrom` and `IteratorFromIndex`, which start the iterator at an arbitrary point. `IteratorFrom` begins at the first key greater than or equal to the key you pass, while `IteratorFromIndex` begins at a given rank (the Nth key in order). This is especially useful for pagination: you can seek straight to the start of a page and walk forward only as far as you need. See the [Sorting and Paginating](#sorting-and-paginating) section for an example.
 
 ## Hashing
 
