@@ -37,6 +37,15 @@ func (a *ReadArrayList) All() iter.Seq2[*ReadCursor, error] {
 	return a.cursor.All()
 }
 
+// IteratorFrom iterates starting at the given index, seeking straight to it
+// instead of walking from the front. negative indexes count from the end.
+func (a *ReadArrayList) IteratorFrom(index int64) iter.Seq2[*ReadCursor, error] {
+	cursor := a.cursor
+	return iterSeqFrom(func() (*CursorIterator, error) {
+		return newArrayListIterFromIndex(cursor, index)
+	}, 0)
+}
+
 // WriteArrayList
 
 type WriteArrayList struct {

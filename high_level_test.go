@@ -3275,6 +3275,45 @@ func testSortedMap(t *testing.T, core Core, hasher Hasher) {
 			} else {
 				assertEqual(t, "k0058", s)
 			}
+			// negative indexes count from the end: -1 is the last entry, -count the first
+			if s, err := firstKey(m.IteratorFromIndex(-1)); err != nil {
+				return err
+			} else {
+				assertEqual(t, "k0059", s)
+			}
+			{
+				// -1 is the last entry, so the iterator yields exactly one
+				n := 0
+				for _, err := range m.IteratorFromIndex(-1) {
+					if err != nil {
+						return err
+					}
+					n++
+				}
+				assertEqual(t, 1, n)
+			}
+			if s, err := firstKey(m.IteratorFromIndex(-count)); err != nil {
+				return err
+			} else {
+				assertEqual(t, "k0000", s)
+			}
+			{
+				// out of range past either end yields nothing
+				n := 0
+				for _, err := range m.IteratorFromIndex(count) {
+					if err != nil {
+						return err
+					}
+					n++
+				}
+				for _, err := range m.IteratorFromIndex(-count - 1) {
+					if err != nil {
+						return err
+					}
+					n++
+				}
+				assertEqual(t, 0, n)
+			}
 
 			// remove the even keys, then re-verify order, count, and presence
 			for j := 0; j < count; j += 2 {
@@ -3581,5 +3620,165 @@ func testSortedMap(t *testing.T, core Core, hasher Hasher) {
 			t.Fatal(err)
 		}
 		assertEqual(t, uint64(7), v1)
+	}
+}
+
+func TestIteratorFrom(t *testing.T) {
+	// CoreMemory
+	{
+		testIteratorFrom(t, NewCoreMemory(), sha1Hasher())
+	}
+	// CoreFile
+	{
+		f, err := os.CreateTemp("", "database")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(f.Name())
+		defer f.Close()
+		testIteratorFrom(t, NewCoreFile(f), sha1Hasher())
+	}
+	// CoreBufferedFile
+	{
+		f, err := os.CreateTemp("", "database")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(f.Name())
+		defer f.Close()
+		testIteratorFrom(t, NewCoreBufferedFileWithSize(f, 1024), sha1Hasher())
+	}
+}
+
+func testIteratorFrom(t *testing.T, core Core, hasher Hasher) {
+	t.Helper()
+	if err := core.SetLength(0); err != nil {
+		t.Fatal(err)
+	}
+	db, err := NewDatabase(core, hasher)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// enough items to force several tiers in both the array-list radix trie
+	// (16^2 = 256 > 200) and the linked-array-list b-tree
+	const count = 200
+
+	history, err := NewWriteArrayList(db.RootCursor())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastSlot, err := history.GetSlot(-1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = history.AppendContext(lastSlot, func(cursor *WriteCursor) error {
+		moment, err := NewWriteHashMap(cursor)
+		if err != nil {
+			return err
+		}
+		listCursor, err := moment.PutCursor("list")
+		if err != nil {
+			return err
+		}
+		list, err := NewWriteArrayList(listCursor)
+		if err != nil {
+			return err
+		}
+		for i := 0; i < count; i++ {
+			if err := list.Append(NewUint(uint64(i))); err != nil {
+				return err
+			}
+		}
+		linkedCursor, err := moment.PutCursor("linked")
+		if err != nil {
+			return err
+		}
+		linked, err := NewWriteLinkedArrayList(linkedCursor)
+		if err != nil {
+			return err
+		}
+		for i := 0; i < count; i++ {
+			if err := linked.Append(NewUint(uint64(i))); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	momentCursor, err := history.GetCursor(-1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moment, err := NewReadHashMap(momentCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listCursor, err := moment.GetCursor("list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := NewReadArrayList(listCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkedCursor, err := moment.GetCursor("linked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	linked, err := NewReadLinkedArrayList(linkedCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// walk an iter.Seq2 and assert it yields resolved, resolved+1, .., count-1
+	checkFrom := func(seq iter.Seq2[*ReadCursor, error], resolved int64) {
+		expected := resolved
+		for c, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			v, err := c.ReadUint()
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertEqual(t, uint64(expected), v)
+			expected++
+		}
+		assertEqual(t, int64(count), expected)
+	}
+
+	// iteratorFrom(k) yields exactly k, k+1, .., count-1, for both types.
+	// negative indexes count from the end: -1 starts at the last element, -count
+	// at the first.
+	starts := []int64{0, 1, 15, 16, 17, 100, count - 2, count - 1, -1, -2, -16, -100, -count}
+	for _, start := range starts {
+		resolved := start
+		if start < 0 {
+			resolved = count + start
+		}
+		checkFrom(list.IteratorFrom(start), resolved)
+		checkFrom(linked.IteratorFrom(start), resolved)
+	}
+
+	// a start out of range (past the end, or more negative than -count) yields nothing
+	for _, start := range []int64{count, count + 1, count + 1000, -count - 1, -count - 1000} {
+		n := 0
+		for _, err := range list.IteratorFrom(start) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			n++
+		}
+		for _, err := range linked.IteratorFrom(start) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			n++
+		}
+		assertEqual(t, 0, n)
 	}
 }

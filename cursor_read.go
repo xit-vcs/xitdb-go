@@ -639,6 +639,56 @@ func sortedStackFromIndex(cursor *ReadCursor, rootPtr int64, startIndex int64) (
 	}
 }
 
+// descend the array-list radix trie to startIndex, pushing one iterLevel per
+// tier with its index set to that tier's child slot. nextInternal then walks
+// forward from there.
+func arrayListStackFromIndex(cursor *ReadCursor, rootPtr int64, startIndex int64, shift byte) ([]iterLevel, error) {
+	var stack []iterLevel
+	pos := rootPtr
+	sh := shift
+	for {
+		block, err := readSlotBlock(cursor, pos)
+		if err != nil {
+			return nil, err
+		}
+		i := (startIndex >> (int64(sh) * BitCount)) & Mask
+		stack = append(stack, iterLevel{position: pos, block: block, index: byte(i)})
+		if sh == 0 {
+			return stack, nil
+		}
+		// every tier above the leaf is a populated index slot for any
+		// startIndex < size, so this child always exists
+		pos = block[i].Value
+		sh--
+	}
+}
+
+// descend the linked-array-list count b-tree to startIndex; the positional
+// analog of sortedStackFromIndex (no separator keys).
+func btreeStackFromIndex(cursor *ReadCursor, rootPtr int64, startIndex int64) ([]iterLevel, error) {
+	var stack []iterLevel
+	nodePtr := rootPtr
+	rem := startIndex
+	for {
+		node, err := cursor.DB.readBTreeNode(nodePtr)
+		if err != nil {
+			return nil, err
+		}
+		position := nodePtr + BTreeNodeHeaderSize
+		if node.Kind == BTreeKindLeaf {
+			stack = append(stack, iterLevel{position: position, block: node.Values, index: byte(rem)})
+			return stack, nil
+		}
+		i := 0
+		for i+1 < node.Num && rem >= node.Counts[i] {
+			rem -= node.Counts[i]
+			i++
+		}
+		stack = append(stack, iterLevel{position: position, block: node.Children, index: byte(i)})
+		nodePtr = node.Children[i].Value
+	}
+}
+
 func sortedStackFromKey(cursor *ReadCursor, rootPtr int64, key []byte) ([]iterLevel, int64, error) {
 	var stack []iterLevel
 	nodePtr := rootPtr
@@ -688,27 +738,115 @@ func sortedStackFromKey(cursor *ReadCursor, rootPtr int64, key []byte) ([]iterLe
 }
 
 // start a sorted-map iterator at the entry with rank startIndex (the count descent),
-// iterating in key order from there
+// iterating in key order from there. negative indexes count from the end.
 func newSortedIterFromIndex(cursor *ReadCursor, startIndex int64) (*CursorIterator, error) {
 	it := &CursorIterator{cursor: cursor}
+	// an unwritten map is none (like All()): yield nothing
+	if cursor.SlotPtr.Slot.Tag == TagNone {
+		return it, nil
+	}
 	total, err := cursor.Count()
 	if err != nil {
 		return nil, err
 	}
-	// an unwritten map is none (like All()): yield nothing
-	if cursor.SlotPtr.Slot.Tag == TagNone || startIndex >= total {
+	idx, ok := resolveStartIndex(startIndex, total)
+	if !ok {
 		return it, nil
 	}
 	rootPtr, err := sortedRootPtr(cursor)
 	if err != nil {
 		return nil, err
 	}
-	stack, err := sortedStackFromIndex(cursor, rootPtr, startIndex)
+	stack, err := sortedStackFromIndex(cursor, rootPtr, idx)
 	if err != nil {
 		return nil, err
 	}
 	it.size = total
-	it.index = startIndex
+	it.index = idx
+	it.stack = stack
+	return it, nil
+}
+
+// resolveStartIndex resolves a possibly-negative start index against size to a
+// 0-based rank. negatives count from the end (-1 is the last entry); anything
+// out of range returns ok=false (yield nothing).
+func resolveStartIndex(index int64, size int64) (int64, bool) {
+	resolved := index
+	if index < 0 {
+		resolved = index + size
+	}
+	if resolved < 0 || resolved >= size {
+		return 0, false
+	}
+	return resolved, true
+}
+
+// start an array-list iterator at startIndex, descending the radix trie straight
+// to that index. negatives count from the end; out of range (or an unwritten
+// list) yields nothing.
+func newArrayListIterFromIndex(cursor *ReadCursor, startIndex int64) (*CursorIterator, error) {
+	it := &CursorIterator{cursor: cursor}
+	if cursor.SlotPtr.Slot.Tag != TagArrayList {
+		return it, nil
+	}
+	if err := cursor.DB.Core.SeekTo(cursor.SlotPtr.Slot.Value); err != nil {
+		return nil, err
+	}
+	var headerBytes [ArrayListHeaderLength]byte
+	if err := cursor.DB.Core.Read(headerBytes[:]); err != nil {
+		return nil, err
+	}
+	header, err := ArrayListHeaderFromBytes(headerBytes[:])
+	if err != nil {
+		return nil, err
+	}
+	idx, ok := resolveStartIndex(startIndex, header.Size)
+	if !ok {
+		return it, nil
+	}
+	lastKey := header.Size - 1
+	var shift byte
+	if lastKey >= SlotCount {
+		shift = byte(math.Log(float64(lastKey)) / math.Log(float64(SlotCount)))
+	}
+	stack, err := arrayListStackFromIndex(cursor, header.Ptr, idx, shift)
+	if err != nil {
+		return nil, err
+	}
+	it.size = header.Size
+	it.index = idx
+	it.stack = stack
+	return it, nil
+}
+
+// start a linked-array-list iterator at startIndex, descending the
+// count-augmented b-tree straight to that index. negatives count from the end.
+func newLinkedArrayListIterFromIndex(cursor *ReadCursor, startIndex int64) (*CursorIterator, error) {
+	it := &CursorIterator{cursor: cursor}
+	if cursor.SlotPtr.Slot.Tag != TagLinkedArrayList {
+		return it, nil
+	}
+	if err := cursor.DB.Core.SeekTo(cursor.SlotPtr.Slot.Value); err != nil {
+		return nil, err
+	}
+	var headerBytes [BTreeHeaderLength]byte
+	if err := cursor.DB.Core.Read(headerBytes[:]); err != nil {
+		return nil, err
+	}
+	header, err := BTreeHeaderFromBytes(headerBytes[:])
+	if err != nil {
+		return nil, err
+	}
+	idx, ok := resolveStartIndex(startIndex, header.Size)
+	if !ok {
+		return it, nil
+	}
+	stack, err := btreeStackFromIndex(cursor, header.RootPtr, idx)
+	if err != nil {
+		return nil, err
+	}
+	it.size = header.Size
+	it.index = idx
 	it.stack = stack
 	return it, nil
 }
@@ -737,7 +875,9 @@ func newSortedIterFromKey(cursor *ReadCursor, startKey []byte) (*CursorIterator,
 	return it, nil
 }
 
-func sortedIterSeq(newIt func() (*CursorIterator, error)) iter.Seq2[*ReadCursor, error] {
+// iterSeqFrom drives a seeked iterator forward, using nodeOffset to skip a
+// b-tree node's kind+num header (BTreeNodeHeaderSize) or 0 for the radix trie.
+func iterSeqFrom(newIt func() (*CursorIterator, error), nodeOffset int64) iter.Seq2[*ReadCursor, error] {
 	return func(yield func(*ReadCursor, error) bool) {
 		it, err := newIt()
 		if err != nil {
@@ -746,7 +886,7 @@ func sortedIterSeq(newIt func() (*CursorIterator, error)) iter.Seq2[*ReadCursor,
 		}
 		for it.index < it.size {
 			it.index++
-			cursor, err := it.nextInternal(BTreeNodeHeaderSize)
+			cursor, err := it.nextInternal(nodeOffset)
 			if err != nil {
 				yield(nil, err)
 				return
@@ -758,4 +898,8 @@ func sortedIterSeq(newIt func() (*CursorIterator, error)) iter.Seq2[*ReadCursor,
 			}
 		}
 	}
+}
+
+func sortedIterSeq(newIt func() (*CursorIterator, error)) iter.Seq2[*ReadCursor, error] {
+	return iterSeqFrom(newIt, BTreeNodeHeaderSize)
 }
