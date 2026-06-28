@@ -1,6 +1,9 @@
 package xitdb
 
-import "iter"
+import (
+	"errors"
+	"iter"
+)
 
 // ReadHashSet
 
@@ -122,7 +125,7 @@ func (s *WriteHashSet) PutCursorByHash(hash []byte) (*WriteCursor, error) {
 func (s *WriteHashSet) RemoveByHash(hash []byte) (bool, error) {
 	_, err := s.writeCursor.WritePath([]PathPart{HashMapRemovePart{Hash: hash}})
 	if err != nil {
-		if err == ErrKeyNotFound {
+		if errors.Is(err, ErrKeyNotFound) {
 			return false, nil
 		}
 		return false, err

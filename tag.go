@@ -3,7 +3,7 @@ package xitdb
 type Tag byte
 
 const (
-	TagNone             Tag = iota
+	TagNone Tag = iota
 	TagIndex
 	TagArrayList
 	TagLinkedArrayList

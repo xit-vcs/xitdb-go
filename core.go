@@ -41,7 +41,7 @@ func writeUint16(c Core, v uint16) error {
 	return c.Write(buf[:])
 }
 
-func readByte_(c Core) (byte, error) {
+func readByte(c Core) (byte, error) {
 	var buf [1]byte
 	if err := c.Read(buf[:]); err != nil {
 		return 0, err
@@ -49,7 +49,7 @@ func readByte_(c Core) (byte, error) {
 	return buf[0], nil
 }
 
-func writeByte_(c Core, v byte) error {
+func writeByte(c Core, v byte) error {
 	return c.Write([]byte{v})
 }
 

@@ -1,6 +1,9 @@
 package xitdb
 
-import "iter"
+import (
+	"errors"
+	"iter"
+)
 
 // ReadSortedSet - a sorted set of byte-string keys (a SortedMap with no values).
 
@@ -129,7 +132,7 @@ func (s *WriteSortedSet) Remove(key string) (bool, error) {
 func (s *WriteSortedSet) RemoveByBytes(key []byte) (bool, error) {
 	_, err := s.writeCursor.WritePath([]PathPart{SortedMapRemovePart{Key: key}})
 	if err != nil {
-		if err == ErrKeyNotFound {
+		if errors.Is(err, ErrKeyNotFound) {
 			return false, nil
 		}
 		return false, err

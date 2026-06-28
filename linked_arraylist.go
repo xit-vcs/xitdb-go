@@ -5,42 +5,42 @@ import "iter"
 // ReadLinkedArrayList
 
 type ReadLinkedArrayList struct {
-	cursor *ReadCursor
+	Cursor *ReadCursor
 }
 
 func NewReadLinkedArrayList(cursor *ReadCursor) (*ReadLinkedArrayList, error) {
 	switch cursor.SlotPtr.Slot.Tag {
 	case TagNone, TagLinkedArrayList:
-		return &ReadLinkedArrayList{cursor: cursor}, nil
+		return &ReadLinkedArrayList{Cursor: cursor}, nil
 	default:
 		return nil, ErrUnexpectedTag
 	}
 }
 
 func (a *ReadLinkedArrayList) Slot() Slot {
-	return a.cursor.Slot()
+	return a.Cursor.Slot()
 }
 
 func (a *ReadLinkedArrayList) Count() (int64, error) {
-	return a.cursor.Count()
+	return a.Cursor.Count()
 }
 
 func (a *ReadLinkedArrayList) GetCursor(index int64) (*ReadCursor, error) {
-	return a.cursor.ReadPath([]PathPart{LinkedArrayListGet{Index: index}})
+	return a.Cursor.ReadPath([]PathPart{LinkedArrayListGet{Index: index}})
 }
 
 func (a *ReadLinkedArrayList) GetSlot(index int64) (Slot, error) {
-	return a.cursor.ReadPathSlot([]PathPart{LinkedArrayListGet{Index: index}})
+	return a.Cursor.ReadPathSlot([]PathPart{LinkedArrayListGet{Index: index}})
 }
 
 func (a *ReadLinkedArrayList) All() iter.Seq2[*ReadCursor, error] {
-	return a.cursor.All()
+	return a.Cursor.All()
 }
 
 // AllFrom iterates starting at the given index, seeking straight to it
 // instead of walking from the front. negative indexes count from the end.
 func (a *ReadLinkedArrayList) AllFrom(index int64) iter.Seq2[*ReadCursor, error] {
-	cursor := a.cursor
+	cursor := a.Cursor
 	return iterSeqFrom(func() (*CursorIterator, error) {
 		return newLinkedArrayListIterFromIndex(cursor, index)
 	}, BTreeNodeHeaderSize)

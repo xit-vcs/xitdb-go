@@ -2790,7 +2790,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				if err != nil {
 					return err
 				}
-				return moment.Put("changing_key", NewUint(uint64(r + 100)))
+				return moment.Put("changing_key", NewUint(uint64(r+100)))
 			})
 			if err != nil {
 				t.Fatal(err)

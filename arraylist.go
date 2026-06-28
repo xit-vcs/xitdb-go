@@ -5,42 +5,42 @@ import "iter"
 // ReadArrayList
 
 type ReadArrayList struct {
-	cursor *ReadCursor
+	Cursor *ReadCursor
 }
 
 func NewReadArrayList(cursor *ReadCursor) (*ReadArrayList, error) {
 	switch cursor.SlotPtr.Slot.Tag {
 	case TagNone, TagArrayList:
-		return &ReadArrayList{cursor: cursor}, nil
+		return &ReadArrayList{Cursor: cursor}, nil
 	default:
 		return nil, ErrUnexpectedTag
 	}
 }
 
 func (a *ReadArrayList) Slot() Slot {
-	return a.cursor.Slot()
+	return a.Cursor.Slot()
 }
 
 func (a *ReadArrayList) Count() (int64, error) {
-	return a.cursor.Count()
+	return a.Cursor.Count()
 }
 
 func (a *ReadArrayList) GetCursor(index int64) (*ReadCursor, error) {
-	return a.cursor.ReadPath([]PathPart{ArrayListGet{Index: index}})
+	return a.Cursor.ReadPath([]PathPart{ArrayListGet{Index: index}})
 }
 
 func (a *ReadArrayList) GetSlot(index int64) (Slot, error) {
-	return a.cursor.ReadPathSlot([]PathPart{ArrayListGet{Index: index}})
+	return a.Cursor.ReadPathSlot([]PathPart{ArrayListGet{Index: index}})
 }
 
 func (a *ReadArrayList) All() iter.Seq2[*ReadCursor, error] {
-	return a.cursor.All()
+	return a.Cursor.All()
 }
 
 // AllFrom iterates starting at the given index, seeking straight to it
 // instead of walking from the front. negative indexes count from the end.
 func (a *ReadArrayList) AllFrom(index int64) iter.Seq2[*ReadCursor, error] {
-	cursor := a.cursor
+	cursor := a.Cursor
 	return iterSeqFrom(func() (*CursorIterator, error) {
 		return newArrayListIterFromIndex(cursor, index)
 	}, 0)

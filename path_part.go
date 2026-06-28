@@ -2,6 +2,7 @@ package xitdb
 
 import (
 	"encoding/binary"
+	"errors"
 	"math"
 )
 
@@ -1023,7 +1024,7 @@ func (p HashMapRemovePart) readSlotPointer(db *Database, isTopLevel bool, writeM
 	keyFound := true
 	_, removeErr := db.removeMapSlot(indexPos, hash, 0, isTopLevel)
 	if removeErr != nil {
-		if removeErr == ErrKeyNotFound {
+		if errors.Is(removeErr, ErrKeyNotFound) {
 			keyFound = false
 		} else {
 			return SlotPointer{}, removeErr

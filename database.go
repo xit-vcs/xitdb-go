@@ -10,23 +10,23 @@ import (
 )
 
 const (
-	Version                        uint16 = 0
-	DatabaseStart                        = HeaderLength
-	BitCount                             = 4
-	SlotCount                            = 1 << BitCount
-	Mask                           int64 = SlotCount - 1
-	IndexBlockSize                       = SlotLength * SlotCount
-	MaxBranchLength                      = 16
+	Version         uint16 = 0
+	DatabaseStart          = HeaderLength
+	BitCount               = 4
+	SlotCount              = 1 << BitCount
+	Mask            int64  = SlotCount - 1
+	IndexBlockSize         = SlotLength * SlotCount
+	MaxBranchLength        = 16
 	// b-tree (backs LinkedArrayList): nodes hold up to BTreeSlotCount entries
-	BTreeSlotCount                       = SlotCount
-	BTreeSplitCount                      = (BTreeSlotCount + 1) / 2
-	BTreeNodeHeaderSize                  = 2
-	BTreeLeafBlockSize                   = BTreeNodeHeaderSize + SlotLength*BTreeSlotCount
-	BTreeBranchBlockSize                 = BTreeNodeHeaderSize + (SlotLength+8)*BTreeSlotCount
+	BTreeSlotCount       = SlotCount
+	BTreeSplitCount      = (BTreeSlotCount + 1) / 2
+	BTreeNodeHeaderSize  = 2
+	BTreeLeafBlockSize   = BTreeNodeHeaderSize + SlotLength*BTreeSlotCount
+	BTreeBranchBlockSize = BTreeNodeHeaderSize + (SlotLength+8)*BTreeSlotCount
 	// sorted_map / sorted_set node block: a leaf holds BTreeSlotCount kv_pair slots;
 	// a branch holds child slots, separator slots, then BTreeSlotCount u64 counts
-	SortedLeafBlockSize                  = BTreeNodeHeaderSize + SlotLength*BTreeSlotCount
-	SortedBranchBlockSize                = BTreeNodeHeaderSize + (SlotLength*2+8)*BTreeSlotCount
+	SortedLeafBlockSize   = BTreeNodeHeaderSize + SlotLength*BTreeSlotCount
+	SortedBranchBlockSize = BTreeNodeHeaderSize + (SlotLength*2+8)*BTreeSlotCount
 )
 
 var (
@@ -68,7 +68,7 @@ func ReadHeader(c Core) (Header, error) {
 	if err := c.Read(magicNumber[:]); err != nil {
 		return Header{}, err
 	}
-	tagByte, err := readByte_(c)
+	tagByte, err := readByte(c)
 	if err != nil {
 		return Header{}, err
 	}
@@ -402,9 +402,9 @@ type ContextFunction func(cursor *WriteCursor) error
 // Database
 
 type Database struct {
-	Core   Core
-	hash   hash.Hash
-	Header Header
+	Core    Core
+	hash    hash.Hash
+	Header  Header
 	TxStart *int64
 }
 
@@ -467,7 +467,7 @@ func (db *Database) digest(data []byte) []byte {
 
 func (db *Database) RootCursor() *WriteCursor {
 	// if the header tag is none, try re-reading it.
-    // this may be necessary if the database was initialized on a different thread.
+	// this may be necessary if the database was initialized on a different thread.
 	if db.Header.Tag == TagNone {
 		if err := db.Core.SeekTo(0); err == nil {
 			if header, err := ReadHeader(db.Core); err == nil {

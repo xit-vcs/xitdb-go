@@ -662,7 +662,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err := core.SeekTo(0); err != nil {
 			t.Fatal(err)
 		}
-		if err := writeByte_(core, 'g'); err != nil {
+		if err := writeByte(core, 'g'); err != nil {
 			t.Fatal(err)
 		}
 
@@ -676,7 +676,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		if err := core.SeekTo(0); err != nil {
 			t.Fatal(err)
 		}
-		if err := writeByte_(core, 'x'); err != nil {
+		if err := writeByte(core, 'x'); err != nil {
 			t.Fatal(err)
 		}
 		if err := core.SeekTo(4); err != nil {
