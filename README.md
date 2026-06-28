@@ -577,40 +577,33 @@ fmt.Println(bigCitiesCount) // 2
 
 ## Sorting and Paginating
 
-The `Hash`-based structures are great for looking data up by key, but they store their contents in hash order, which is meaningless to a human. You may need to display data in a sensible order (like newest posts first or users by signup date) and show it one page at a time. Relational databases like SQLite have this built-in: you declare a `CREATE INDEX`, write `ORDER BY created_ts LIMIT 20 OFFSET 40`, and the query planner maintains the index and seeks into it for you.
+The `Hash`-based structures are great for looking data up by key, but they store their contents in hash order, which is meaningless to a human. Real apps need to show data in a sensible order (such as users listed alphabetically) one page at a time. Relational databases like SQLite have this built-in: you declare a `CREATE INDEX`, write `ORDER BY username LIMIT 20 OFFSET 40`, and the query planner maintains the index for you.
 
-In xitdb there are no built-in indexes, so you build and maintain them yourself. That's a little more code, but the index is just another data structure: a `SortedMap` whose keys are crafted to sort the way you want. You keep it in sync by writing to it in the same transaction that writes the primary data.
+In xitdb there are no built-in indexes, so you build and maintain them yourself. That's a little more code, but the index is just another data structure: a `SortedMap` whose keys sort the way you want. You keep it in sync by writing to it in the same transaction that writes the primary data.
 
-Let's model the storage a basic blog would need: a collection of posts we look up by id, plus a secondary index that lets us list them oldest-first with pagination. The primary store is a `HashMap` from post id to the post's fields (like a row keyed by its primary key). The secondary index is a `SortedMap` keyed by creation time, whose value is the post id to look up.
+Why a `SortedMap` and not an `ArrayList`? An `ArrayList` keeps things in insertion order, which is only useful when the order you want *is* the order you wrote them in. The moment you want a different order (alphabetical, by score, by anything that isn't "when it arrived") you need a structure that stays sorted by a key. A `SortedMap` does, and it can seek straight to the first key greater than or equal to a given value, which is what makes type-ahead search possible.
 
-The trick is the key. A `SortedMap` orders its keys lexicographically by their raw bytes, so we encode the timestamp as a big-endian integer (so byte order matches chronological order) and append the post id to break ties between posts created in the same second and keep every key unique:
+Let's model a user directory: a collection of users we look up by id, plus a secondary index that lists them alphabetically by username. The primary store is a `HashMap` from user id to the user's fields (like a row keyed by its primary key). The secondary index is a `SortedMap` keyed by username, whose value is the user id to look up.
 
-```go
-// build a SortedMap key that sorts by creation time. the big-endian
-// timestamp makes byte order match chronological order; the post id is
-// appended so two posts with the same timestamp still get distinct keys.
-func orderKey(timestamp uint64, postID []byte) []byte {
-    key := make([]byte, 8+len(postID))
-    binary.BigEndian.PutUint64(key[:8], timestamp)
-    copy(key[8:], postID)
-    return key
-}
-```
+A `SortedMap` orders its keys lexicographically by their raw bytes. For ASCII usernames that's just alphabetical order, and since usernames are unique, every key is already distinct, so the key is simply the username itself. For a sort key that *isn't* unique, like a score, you'd append the id to keep keys distinct. See the note at the end.
 
-Now we write some posts. On each insert we write the post into the primary map and add an entry to the secondary index (keeping both in sync is your job, not the database's):
+Now we write some users. Note they're inserted in arbitrary order; the index sorts them, so insertion order doesn't matter. On each insert we write the user into the primary map and add an entry to the secondary index (keeping both in sync is your job, not the database's):
 
 ```go
-type Post struct {
-    ID        string
-    Title     string
-    CreatedTs uint64
+type User struct {
+    ID       string
+    Username string
+    Name     string
 }
 
-// post ids are fixed-length so the timestamp tie-breaker stays aligned
-newPosts := []Post{
-    {ID: "post000000000001", Title: "Hello, world", CreatedTs: 1_700_000_000},
-    {ID: "post000000000002", Title: "Second post", CreatedTs: 1_700_000_500},
-    {ID: "post000000000003", Title: "Third post", CreatedTs: 1_700_001_000},
+// inserted in arbitrary order; the index will sort them alphabetically
+newUsers := []User{
+    {ID: "user000000000001", Username: "dave", Name: "Dave Smith"},
+    {ID: "user000000000002", Username: "alice", Name: "Alice Jones"},
+    {ID: "user000000000003", Username: "carol", Name: "Carol White"},
+    {ID: "user000000000004", Username: "dan", Name: "Dan Brown"},
+    {ID: "user000000000005", Username: "bob", Name: "Bob Lee"},
+    {ID: "user000000000006", Username: "eve", Name: "Eve Adams"},
 }
 
 lastSlot, err := history.GetSlot(-1)
@@ -623,47 +616,47 @@ err = history.AppendContext(lastSlot, func(cursor *xitdb.WriteCursor) error {
         return err
     }
 
-    // the primary store: a HashMap from post id to the post's fields
-    idToPostCursor, err := moment.PutCursor("id->post")
+    // the primary store: a HashMap from user id to the user's fields
+    idToUserCursor, err := moment.PutCursor("id->user")
     if err != nil {
         return err
     }
-    idToPost, err := xitdb.NewWriteHashMap(idToPostCursor)
-    if err != nil {
-        return err
-    }
-
-    // the secondary index: a SortedMap ordered by creation time. there's
-    // no CREATE INDEX here, so we maintain it ourselves on every write.
-    createdTsToPostIDCursor, err := moment.PutCursor("created-ts->post-id")
-    if err != nil {
-        return err
-    }
-    createdTsToPostID, err := xitdb.NewWriteSortedMap(createdTsToPostIDCursor)
+    idToUser, err := xitdb.NewWriteHashMap(idToUserCursor)
     if err != nil {
         return err
     }
 
-    for _, post := range newPosts {
-        // write the post into the primary map under its id
-        postCursor, err := idToPost.PutCursor(post.ID)
+    // the secondary index: a SortedMap ordered alphabetically by username.
+    // there's no CREATE INDEX here, so we maintain it ourselves on every write.
+    usernameToIDCursor, err := moment.PutCursor("username->id")
+    if err != nil {
+        return err
+    }
+    usernameToID, err := xitdb.NewWriteSortedMap(usernameToIDCursor)
+    if err != nil {
+        return err
+    }
+
+    for _, user := range newUsers {
+        // write the user into the primary map under its id
+        userCursor, err := idToUser.PutCursor(user.ID)
         if err != nil {
             return err
         }
-        postMap, err := xitdb.NewWriteHashMap(postCursor)
+        userMap, err := xitdb.NewWriteHashMap(userCursor)
         if err != nil {
             return err
         }
-        if err := postMap.Put("title", xitdb.NewString(post.Title)); err != nil {
+        if err := userMap.Put("username", xitdb.NewString(user.Username)); err != nil {
             return err
         }
-        if err := postMap.Put("created-ts", xitdb.NewUint(post.CreatedTs)); err != nil {
+        if err := userMap.Put("name", xitdb.NewString(user.Name)); err != nil {
             return err
         }
 
-        // add an entry to the secondary index. the key sorts by time,
-        // and the value is the post id we'll use to look the post back up.
-        if err := createdTsToPostID.PutByBytes(orderKey(post.CreatedTs, []byte(post.ID)), xitdb.NewString(post.ID)); err != nil {
+        // add an entry to the secondary index: the key is the username (the
+        // sort key), and the value is the user id we'll use to look it back up.
+        if err := usernameToID.Put(user.Username, xitdb.NewString(user.ID)); err != nil {
             return err
         }
     }
@@ -674,7 +667,7 @@ if err != nil {
 }
 ```
 
-To display a page, we walk the `SortedMap` instead of the `HashMap`. A web app would take a `pageSize` and an `after` offset from the request (something like `/posts?after=20`), so this is the xitdb equivalent of `ORDER BY created_ts LIMIT pageSize OFFSET after`:
+To display a page, we walk the `SortedMap` instead of the `HashMap`. A web app would take a `pageSize` and an `after` offset from the request (something like `/users?after=20`), so this is the xitdb equivalent of `ORDER BY username LIMIT pageSize OFFSET after`:
 
 ```go
 momentCursor, err := history.GetCursor(-1)
@@ -686,20 +679,20 @@ if err != nil {
     log.Fatal(err)
 }
 
-idToPostCursor, err := moment.GetCursor("id->post")
+idToUserCursor, err := moment.GetCursor("id->user")
 if err != nil {
     log.Fatal(err)
 }
-idToPost, err := xitdb.NewReadHashMap(idToPostCursor)
+idToUser, err := xitdb.NewReadHashMap(idToUserCursor)
 if err != nil {
     log.Fatal(err)
 }
 
-createdTsToPostIDCursor, err := moment.GetCursor("created-ts->post-id")
+usernameToIDCursor, err := moment.GetCursor("username->id")
 if err != nil {
     log.Fatal(err)
 }
-createdTsToPostID, err := xitdb.NewReadSortedMap(createdTsToPostIDCursor)
+usernameToID, err := xitdb.NewReadSortedMap(usernameToIDCursor)
 if err != nil {
     log.Fatal(err)
 }
@@ -708,7 +701,7 @@ if err != nil {
 pageSize := int64(2)
 after := int64(0)
 
-count, err := createdTsToPostID.Count()
+count, err := usernameToID.Count()
 if err != nil {
     log.Fatal(err)
 }
@@ -722,7 +715,7 @@ if end > count {
 // finds rank `after` in O(log n) without scanning the entries it skips, so
 // jumping to page 500 is just as cheap as page 1.
 i := after
-for idCursor, err := range createdTsToPostID.AllFromIndex(after) {
+for idCursor, err := range usernameToID.AllFromIndex(after) {
     if err != nil {
         log.Fatal(err)
     }
@@ -735,38 +728,83 @@ for idCursor, err := range createdTsToPostID.AllFromIndex(after) {
         log.Fatal(err)
     }
 
-    // the index entry's value is the post id; use it to read the
-    // full post out of the primary map
-    postIDBytes, err := idKv.ValueCursor.ReadBytes(1024)
+    // the index entry's value is the user id; use it to read the
+    // full user out of the primary map
+    userIDBytes, err := idKv.ValueCursor.ReadBytes(1024)
     if err != nil {
         log.Fatal(err)
     }
 
-    postCursor, err := idToPost.GetCursor(string(postIDBytes))
+    userCursor, err := idToUser.GetCursor(string(userIDBytes))
     if err != nil {
         log.Fatal(err)
     }
-    postMap, err := xitdb.NewReadHashMap(postCursor)
+    userMap, err := xitdb.NewReadHashMap(userCursor)
     if err != nil {
         log.Fatal(err)
     }
-    titleCursor, err := postMap.GetCursor("title")
+    nameCursor, err := userMap.GetCursor("name")
     if err != nil {
         log.Fatal(err)
     }
-    title, err := titleCursor.ReadBytes(1024)
+    name, err := nameCursor.ReadBytes(1024)
     if err != nil {
         log.Fatal(err)
     }
 
     // a real app would render this into the page's HTML
-    fmt.Println(string(title))
+    fmt.Println(string(name))
 
     i++
 }
 ```
 
-This works for any ordering you need: sort by a username with a string key, by score with a big-endian integer key, or build several `SortedMap` indexes over the same primary `HashMap` to offer the data in different orders. With xitdb you "bring your own index". It takes a bit more effort than the declarative convenience of SQL databases, but it gives you more explicit control, and avoids the common problem in SQL where queries silently become inefficient due to not using indexes. In xitdb, inefficiency is hard to miss because you are always writing your queries as imperative code and the indexes are always explicit.
+Pagination by index is only half of what the ordering buys us. Because the index is sorted by username, we can also seek straight to a *key* (the first username greater than or equal to a prefix) and walk forward only as far as the prefix matches. That's a type-ahead search (think @-mention autocomplete), and it's the thing an `ArrayList` can't do: with no sorted index, there's nothing to seek into. We use `AllFrom` (which takes a key) instead of `AllFromIndex` (which takes a rank):
+
+```go
+// the user typed "da" into an @-mention box; find everyone whose username
+// starts with it. AllFrom seeks to the first key >= "da" in O(log n),
+// then we walk forward until a username no longer starts with the prefix.
+prefix := []byte("da")
+for idCursor, err := range usernameToID.AllFrom(prefix) {
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    idKv, err := idCursor.ReadKeyValuePair()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // the key is the username; stop once we've walked past the prefix
+    username, err := idKv.KeyCursor.ReadBytes(1024)
+    if err != nil {
+        log.Fatal(err)
+    }
+    if !bytes.HasPrefix(username, prefix) {
+        break
+    }
+
+    // a real app would offer this as a suggestion (here: "dan", then "dave")
+    fmt.Println(string(username))
+}
+```
+
+This works for any ordering you need: sort by a username with a string key like we did here, by score with a big-endian integer key (encode numbers big-endian so their byte order matches numeric order), or build several `SortedMap` indexes over the same primary `HashMap` to offer the data in different orders. When a sort key isn't unique (many users could share a score), append the id to keep every key distinct:
+
+```go
+// build a SortedMap key that sorts by score. the big-endian score makes byte
+// order match numeric order; the user id is appended so two users with the
+// same score still get distinct keys.
+func orderKey(score uint64, userID []byte) []byte {
+    key := make([]byte, 8+len(userID))
+    binary.BigEndian.PutUint64(key[:8], score)
+    copy(key[8:], userID)
+    return key
+}
+```
+
+With xitdb you "bring your own index". It takes a bit more effort than the declarative convenience of SQL databases, but it gives you more explicit control, and avoids the common problem in SQL where queries silently become inefficient due to not using indexes. In xitdb, inefficiency is hard to miss because you are always writing your queries as imperative code and the indexes are always explicit.
 
 ## Large Byte Arrays
 

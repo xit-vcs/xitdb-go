@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha1"
-	"encoding/binary"
 	"io"
 	"iter"
 	"os"
@@ -1963,27 +1962,20 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			t.Fatal(err)
 		}
 
-		type post struct {
-			id        string
-			title     string
-			createdTs uint64
+		type user struct {
+			id       string
+			username string
+			name     string
 		}
 
-		// post ids are fixed-length so the timestamp tie-breaker stays aligned
-		newPosts := []post{
-			{id: "post000000000001", title: "Hello, world", createdTs: 1_700_000_000},
-			{id: "post000000000002", title: "Second post", createdTs: 1_700_000_500},
-			{id: "post000000000003", title: "Third post", createdTs: 1_700_001_000},
-		}
-
-		// build a SortedMap key that sorts by creation time. the big-endian
-		// timestamp makes byte order match chronological order; the post id is
-		// appended so two posts with the same timestamp still get distinct keys.
-		orderKey := func(timestamp uint64, postID []byte) []byte {
-			key := make([]byte, 8+len(postID))
-			binary.BigEndian.PutUint64(key[:8], timestamp)
-			copy(key[8:], postID)
-			return key
+		// inserted in arbitrary order; the index sorts them alphabetically
+		newUsers := []user{
+			{id: "user000000000001", username: "dave", name: "Dave Smith"},
+			{id: "user000000000002", username: "alice", name: "Alice Jones"},
+			{id: "user000000000003", username: "carol", name: "Carol White"},
+			{id: "user000000000004", username: "dan", name: "Dan Brown"},
+			{id: "user000000000005", username: "bob", name: "Bob Lee"},
+			{id: "user000000000006", username: "eve", name: "Eve Adams"},
 		}
 
 		lastSlot, err := history.GetSlot(-1)
@@ -1996,43 +1988,44 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 				return err
 			}
 
-			// the primary store: a HashMap from post id to the post's fields
-			idToPostCursor, err := moment.PutCursor("id->post")
+			// the primary store: a HashMap from user id to the user's fields
+			idToUserCursor, err := moment.PutCursor("id->user")
 			if err != nil {
 				return err
 			}
-			idToPost, err := NewWriteHashMap(idToPostCursor)
-			if err != nil {
-				return err
-			}
-
-			// the secondary index: a SortedMap ordered by creation time
-			createdTsToPostIDCursor, err := moment.PutCursor("created-ts->post-id")
-			if err != nil {
-				return err
-			}
-			createdTsToPostID, err := NewWriteSortedMap(createdTsToPostIDCursor)
+			idToUser, err := NewWriteHashMap(idToUserCursor)
 			if err != nil {
 				return err
 			}
 
-			for _, p := range newPosts {
-				postCursor, err := idToPost.PutCursor(p.id)
+			// the secondary index: a SortedMap ordered alphabetically by username
+			usernameToIDCursor, err := moment.PutCursor("username->id")
+			if err != nil {
+				return err
+			}
+			usernameToID, err := NewWriteSortedMap(usernameToIDCursor)
+			if err != nil {
+				return err
+			}
+
+			for _, u := range newUsers {
+				userCursor, err := idToUser.PutCursor(u.id)
 				if err != nil {
 					return err
 				}
-				postMap, err := NewWriteHashMap(postCursor)
+				userMap, err := NewWriteHashMap(userCursor)
 				if err != nil {
 					return err
 				}
-				if err := postMap.Put("title", NewString(p.title)); err != nil {
+				if err := userMap.Put("username", NewString(u.username)); err != nil {
 					return err
 				}
-				if err := postMap.Put("created-ts", NewUint(p.createdTs)); err != nil {
+				if err := userMap.Put("name", NewString(u.name)); err != nil {
 					return err
 				}
 
-				if err := createdTsToPostID.PutByBytes(orderKey(p.createdTs, []byte(p.id)), NewString(p.id)); err != nil {
+				// the key is the username (the sort key); the value is the id
+				if err := usernameToID.Put(u.username, NewString(u.id)); err != nil {
 					return err
 				}
 			}
@@ -2051,34 +2044,34 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			t.Fatal(err)
 		}
 
-		idToPostCursor, err := moment.GetCursor("id->post")
+		idToUserCursor, err := moment.GetCursor("id->user")
 		if err != nil {
 			t.Fatal(err)
 		}
-		idToPost, err := NewReadHashMap(idToPostCursor)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		createdTsToPostIDCursor, err := moment.GetCursor("created-ts->post-id")
-		if err != nil {
-			t.Fatal(err)
-		}
-		createdTsToPostID, err := NewReadSortedMap(createdTsToPostIDCursor)
+		idToUser, err := NewReadHashMap(idToUserCursor)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		count, err := createdTsToPostID.Count()
+		usernameToIDCursor, err := moment.GetCursor("username->id")
 		if err != nil {
 			t.Fatal(err)
 		}
-		assertEqual(t, int64(len(newPosts)), count)
+		usernameToID, err := NewReadSortedMap(usernameToIDCursor)
+		if err != nil {
+			t.Fatal(err)
+		}
 
-		// page through the index two at a time, oldest first, and check we get
-		// every post back in creation order
+		count, err := usernameToID.Count()
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertEqual(t, int64(len(newUsers)), count)
+
+		// page through the index two at a time and check we get every user back
+		// in alphabetical order by username (not the order they were inserted)
 		pageSize := int64(2)
-		expectedTitles := []string{"Hello, world", "Second post", "Third post"}
+		expectedNames := []string{"Alice Jones", "Bob Lee", "Carol White", "Dan Brown", "Dave Smith", "Eve Adams"}
 
 		seen := 0
 		for after := int64(0); after < count; after += pageSize {
@@ -2088,7 +2081,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			}
 			// seek straight to the start of the page, then walk forward
 			i := after
-			for idCursor, err := range createdTsToPostID.AllFromIndex(after) {
+			for idCursor, err := range usernameToID.AllFromIndex(after) {
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -2101,36 +2094,66 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 					t.Fatal(err)
 				}
 
-				// the index entry's value is the post id; use it to read the
-				// full post out of the primary map
-				postIDBytes, err := idKv.ValueCursor.ReadBytes(maxRead)
+				// the index entry's value is the user id; use it to read the
+				// full user out of the primary map
+				userIDBytes, err := idKv.ValueCursor.ReadBytes(maxRead)
 				if err != nil {
 					t.Fatal(err)
 				}
-				postID := string(postIDBytes)
+				userID := string(userIDBytes)
 
-				postCursor, err := idToPost.GetCursor(postID)
+				userCursor, err := idToUser.GetCursor(userID)
 				if err != nil {
 					t.Fatal(err)
 				}
-				postMap, err := NewReadHashMap(postCursor)
+				userMap, err := NewReadHashMap(userCursor)
 				if err != nil {
 					t.Fatal(err)
 				}
-				titleCursor, err := postMap.GetCursor("title")
+				nameCursor, err := userMap.GetCursor("name")
 				if err != nil {
 					t.Fatal(err)
 				}
-				titleBytes, err := titleCursor.ReadBytes(maxRead)
+				nameBytes, err := nameCursor.ReadBytes(maxRead)
 				if err != nil {
 					t.Fatal(err)
 				}
-				assertEqual(t, expectedTitles[seen], string(titleBytes))
+				assertEqual(t, expectedNames[seen], string(nameBytes))
 				seen += 1
 				i += 1
 			}
 		}
-		assertEqual(t, len(newPosts), seen)
+		assertEqual(t, len(newUsers), seen)
+
+		// autocomplete: seek straight to the first username >= "da", then walk
+		// forward only while the prefix matches. this lower-bound seek by key is
+		// the thing an ArrayList can't do.
+		prefix := []byte("da")
+		expectedMatches := []string{"dan", "dave"}
+		matches := 0
+		for idCursor, err := range usernameToID.AllFrom(prefix) {
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			idKv, err := idCursor.ReadKeyValuePair()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// the key is the username; stop once we've walked past the prefix
+			usernameBytes, err := idKv.KeyCursor.ReadBytes(maxRead)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.HasPrefix(usernameBytes, prefix) {
+				break
+			}
+
+			assertEqual(t, expectedMatches[matches], string(usernameBytes))
+			matches += 1
+		}
+		assertEqual(t, len(expectedMatches), matches)
 	}
 }
 
