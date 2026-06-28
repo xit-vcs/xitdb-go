@@ -116,6 +116,14 @@ func (s *WriteSortedSet) All() iter.Seq2[*WriteCursor, error] {
 	return s.writeCursor.All()
 }
 
+func (s *WriteSortedSet) AllFrom(startKey []byte) iter.Seq2[*WriteCursor, error] {
+	return writeIter(s.ReadSortedSet.AllFrom(startKey))
+}
+
+func (s *WriteSortedSet) AllFromIndex(startIndex int64) iter.Seq2[*WriteCursor, error] {
+	return writeIter(s.ReadSortedSet.AllFromIndex(startIndex))
+}
+
 func (s *WriteSortedSet) Put(key string) error {
 	return s.PutByBytes([]byte(key))
 }

@@ -156,21 +156,24 @@ func (w *CursorWriter) SeekTo(position int64) {
 	}
 }
 
-// WriteCursor All() - shadows ReadCursor.All() to return WriteCursors
-
-func (c *WriteCursor) All() iter.Seq2[*WriteCursor, error] {
+// writeIter wraps a ReadCursor iterator so it yields WriteCursors. It backs the
+// write-side All/AllFrom/AllFromIndex methods, which shadow their read versions.
+func writeIter(seq iter.Seq2[*ReadCursor, error]) iter.Seq2[*WriteCursor, error] {
 	return func(yield func(*WriteCursor, error) bool) {
-		for rc, err := range c.ReadCursor.All() {
+		for rc, err := range seq {
 			if err != nil {
-				if !yield(nil, err) {
-					return
-				}
+				yield(nil, err)
 				return
 			}
-			wc := &WriteCursor{ReadCursor: rc}
-			if !yield(wc, nil) {
+			if !yield(&WriteCursor{ReadCursor: rc}, nil) {
 				return
 			}
 		}
 	}
+}
+
+// WriteCursor All() - shadows ReadCursor.All() to return WriteCursors
+
+func (c *WriteCursor) All() iter.Seq2[*WriteCursor, error] {
+	return writeIter(c.ReadCursor.All())
 }
