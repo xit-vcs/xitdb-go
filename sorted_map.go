@@ -29,16 +29,16 @@ func (m *ReadSortedMap) All() iter.Seq2[*ReadCursor, error] {
 	return m.Cursor.All()
 }
 
-// IteratorFrom iterates in key order starting at the first entry with key >= startKey
-func (m *ReadSortedMap) IteratorFrom(startKey []byte) iter.Seq2[*ReadCursor, error] {
+// AllFrom iterates in key order starting at the first entry with key >= startKey
+func (m *ReadSortedMap) AllFrom(startKey []byte) iter.Seq2[*ReadCursor, error] {
 	cursor := m.Cursor
 	return sortedIterSeq(func() (*CursorIterator, error) {
 		return newSortedIterFromKey(cursor, startKey)
 	})
 }
 
-// IteratorFromIndex iterates in key order starting at the entry with rank startIndex
-func (m *ReadSortedMap) IteratorFromIndex(startIndex int64) iter.Seq2[*ReadCursor, error] {
+// AllFromIndex iterates in key order starting at the entry with rank startIndex
+func (m *ReadSortedMap) AllFromIndex(startIndex int64) iter.Seq2[*ReadCursor, error] {
 	cursor := m.Cursor
 	return sortedIterSeq(func() (*CursorIterator, error) {
 		return newSortedIterFromIndex(cursor, startIndex)

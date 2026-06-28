@@ -718,11 +718,11 @@ if end > count {
 }
 
 // seek straight to the start of the page, then walk forward one entry at a
-// time. because SortedMap is a count-augmented B+tree, IteratorFromIndex
+// time. because SortedMap is a count-augmented B+tree, AllFromIndex
 // finds rank `after` in O(log n) without scanning the entries it skips, so
 // jumping to page 500 is just as cheap as page 1.
 i := after
-for idCursor, err := range createdTsToPostID.IteratorFromIndex(after) {
+for idCursor, err := range createdTsToPostID.AllFromIndex(after) {
     if err != nil {
         log.Fatal(err)
     }
@@ -883,7 +883,7 @@ The above code iterates over `people`, which is an `ArrayList`, and for each per
 
 The iteration of the `HashMap` looks the same with `HashSet`, `CountedHashMap`, and `CountedHashSet`. When iterating, you call `ReadKeyValuePair` on the cursor and can read the `KeyCursor` and `ValueCursor` from it. In maps, `Put` sets the key and value. In sets, `Put` only sets the key; the value will always have a tag type of `TagNone`.
 
-`ArrayList` and `LinkedArrayList` also have an `IteratorFrom` method, which starts the iterator from the given index. `SortedMap` and `SortedSet` have `IteratorFrom` and `IteratorFromIndex` to start the iterator from a key or index respectively. This is especially useful for pagination: you can seek straight to the start of a page and walk forward only as far as you need. See the [Sorting and Paginating](#sorting-and-paginating) section for an example.
+`ArrayList` and `LinkedArrayList` also have an `AllFrom` method, which starts the iterator from the given index. `SortedMap` and `SortedSet` have `AllFrom` and `AllFromIndex` to start the iterator from a key or index respectively. This is especially useful for pagination: you can seek straight to the start of a page and walk forward only as far as you need. See the [Sorting and Paginating](#sorting-and-paginating) section for an example.
 
 ## Hashing
 

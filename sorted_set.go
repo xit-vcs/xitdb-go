@@ -29,14 +29,14 @@ func (s *ReadSortedSet) All() iter.Seq2[*ReadCursor, error] {
 	return s.Cursor.All()
 }
 
-func (s *ReadSortedSet) IteratorFrom(startKey []byte) iter.Seq2[*ReadCursor, error] {
+func (s *ReadSortedSet) AllFrom(startKey []byte) iter.Seq2[*ReadCursor, error] {
 	cursor := s.Cursor
 	return sortedIterSeq(func() (*CursorIterator, error) {
 		return newSortedIterFromKey(cursor, startKey)
 	})
 }
 
-func (s *ReadSortedSet) IteratorFromIndex(startIndex int64) iter.Seq2[*ReadCursor, error] {
+func (s *ReadSortedSet) AllFromIndex(startIndex int64) iter.Seq2[*ReadCursor, error] {
 	cursor := s.Cursor
 	return sortedIterSeq(func() (*CursorIterator, error) {
 		return newSortedIterFromIndex(cursor, startIndex)
