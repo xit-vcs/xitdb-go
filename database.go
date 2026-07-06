@@ -503,6 +503,9 @@ func (db *Database) Compact(targetCore Core) (*Database, error) {
 	}
 
 	if db.Header.Tag == TagNone {
+		if err := target.Core.Sync(); err != nil {
+			return nil, fmt.Errorf("sync: %w", err)
+		}
 		return target, nil
 	}
 	if db.Header.Tag != TagArrayList {
@@ -522,6 +525,9 @@ func (db *Database) Compact(targetCore Core) (*Database, error) {
 		return nil, fmt.Errorf("read source header: %w", err)
 	}
 	if sourceHeader.Size == 0 {
+		if err := target.Core.Sync(); err != nil {
+			return nil, fmt.Errorf("sync: %w", err)
+		}
 		return target, nil
 	}
 
@@ -596,6 +602,12 @@ func (db *Database) Compact(targetCore Core) (*Database, error) {
 	}
 	if err := target.Core.Flush(); err != nil {
 		return nil, fmt.Errorf("final flush: %w", err)
+	}
+
+	// fsync so the compacted database is durable, since callers
+	// typically rename it over an existing database file
+	if err := target.Core.Sync(); err != nil {
+		return nil, fmt.Errorf("sync: %w", err)
 	}
 
 	return target, nil
