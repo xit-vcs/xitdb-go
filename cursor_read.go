@@ -741,9 +741,13 @@ func sortedStackFromKey(cursor *ReadCursor, rootPtr int64, key []byte) ([]iterLe
 // iterating in key order from there. negative indexes count from the end.
 func newSortedIterFromIndex(cursor *ReadCursor, startIndex int64) (*CursorIterator, error) {
 	it := &CursorIterator{cursor: cursor}
-	// an unwritten map is none (like All()): yield nothing
-	if cursor.SlotPtr.Slot.Tag == TagNone {
+	switch cursor.SlotPtr.Slot.Tag {
+	case TagNone:
+		// an unwritten map is none (like All()): yield nothing
 		return it, nil
+	case TagSortedMap, TagSortedSet:
+	default:
+		return nil, ErrUnexpectedTag
 	}
 	total, err := cursor.Count()
 	if err != nil {
@@ -786,8 +790,13 @@ func resolveStartIndex(index int64, size int64) (int64, bool) {
 // list) yields nothing.
 func newArrayListIterFromIndex(cursor *ReadCursor, startIndex int64) (*CursorIterator, error) {
 	it := &CursorIterator{cursor: cursor}
-	if cursor.SlotPtr.Slot.Tag != TagArrayList {
+	switch cursor.SlotPtr.Slot.Tag {
+	case TagNone:
+		// an unwritten list yields nothing
 		return it, nil
+	case TagArrayList:
+	default:
+		return nil, ErrUnexpectedTag
 	}
 	if err := cursor.DB.Core.SeekTo(cursor.SlotPtr.Slot.Value); err != nil {
 		return nil, err
@@ -823,8 +832,13 @@ func newArrayListIterFromIndex(cursor *ReadCursor, startIndex int64) (*CursorIte
 // count-augmented b-tree straight to that index. negatives count from the end.
 func newLinkedArrayListIterFromIndex(cursor *ReadCursor, startIndex int64) (*CursorIterator, error) {
 	it := &CursorIterator{cursor: cursor}
-	if cursor.SlotPtr.Slot.Tag != TagLinkedArrayList {
+	switch cursor.SlotPtr.Slot.Tag {
+	case TagNone:
+		// an unwritten list yields nothing
 		return it, nil
+	case TagLinkedArrayList:
+	default:
+		return nil, ErrUnexpectedTag
 	}
 	if err := cursor.DB.Core.SeekTo(cursor.SlotPtr.Slot.Value); err != nil {
 		return nil, err
@@ -854,8 +868,13 @@ func newLinkedArrayListIterFromIndex(cursor *ReadCursor, startIndex int64) (*Cur
 // start a sorted-map iterator at the first entry with key >= startKey
 func newSortedIterFromKey(cursor *ReadCursor, startKey []byte) (*CursorIterator, error) {
 	it := &CursorIterator{cursor: cursor}
-	if cursor.SlotPtr.Slot.Tag == TagNone {
+	switch cursor.SlotPtr.Slot.Tag {
+	case TagNone:
+		// an unwritten map yields nothing
 		return it, nil
+	case TagSortedMap, TagSortedSet:
+	default:
+		return nil, ErrUnexpectedTag
 	}
 	total, err := cursor.Count()
 	if err != nil {

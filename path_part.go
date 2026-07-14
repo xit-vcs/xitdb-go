@@ -43,6 +43,8 @@ func (p ArrayListInit) readSlotPointer(db *Database, isTopLevel bool, writeMode 
 			if err := db.Header.Write(db.Core); err != nil {
 				return SlotPointer{}, err
 			}
+		} else if db.Header.Tag != TagArrayList {
+			return SlotPointer{}, ErrUnexpectedTag
 		}
 		nextSlotPtr := slotPtr.WithSlot(slotPtr.Slot.WithTag(TagArrayList))
 		return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr)
@@ -825,6 +827,22 @@ func (p HashMapInitPart) readSlotPointer(db *Database, isTopLevel bool, writeMod
 			db.Header = db.Header.WithTag(tag)
 			if err := db.Header.Write(db.Core); err != nil {
 				return SlotPointer{}, err
+			}
+		} else {
+			// map/set variants are interchangeable, but counted-ness must
+			// match: counted layouts have an 8-byte count before the index
+			// block, so misreading one as the other corrupts the database
+			switch db.Header.Tag {
+			case TagHashMap, TagHashSet:
+				if p.Counted {
+					return SlotPointer{}, ErrUnexpectedTag
+				}
+			case TagCountedHashMap, TagCountedHashSet:
+				if !p.Counted {
+					return SlotPointer{}, ErrUnexpectedTag
+				}
+			default:
+				return SlotPointer{}, ErrUnexpectedTag
 			}
 		}
 		nextSlotPtr := slotPtr.WithSlot(slotPtr.Slot.WithTag(tag))

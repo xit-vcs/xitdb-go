@@ -2784,6 +2784,11 @@ func remapBTreeNode(sourceCore, targetCore Core, hashSize uint16, offsetMap map[
 			var sb [SlotLength]byte
 			copy(sb[:], body[i*SlotLength:i*SlotLength+SlotLength])
 			child := SlotFromBytes(sb)
+			// non-index children are copied verbatim, so validate the tag
+			// here; slots that go through remapSlot are validated there
+			if err := child.Tag.validate(); err != nil {
+				return 0, err
+			}
 			if child.Tag == TagIndex {
 				remappedPtr, err := remapBTreeNode(sourceCore, targetCore, hashSize, offsetMap, child.Value)
 				if err != nil {
@@ -2929,6 +2934,11 @@ func remapSortedMapNode(sourceCore, targetCore Core, hashSize uint16, offsetMap 
 			var sb [SlotLength]byte
 			copy(sb[:], body[i*SlotLength:i*SlotLength+SlotLength])
 			child := SlotFromBytes(sb)
+			// non-index children are copied verbatim, so validate the tag
+			// here; slots that go through remapSlot are validated there
+			if err := child.Tag.validate(); err != nil {
+				return 0, err
+			}
 			if child.Tag == TagIndex {
 				remappedPtr, err := remapSortedMapNode(sourceCore, targetCore, hashSize, offsetMap, child.Value)
 				if err != nil {
