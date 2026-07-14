@@ -242,7 +242,13 @@ func (p ArrayListAppend) readSlotPointer(db *Database, isTopLevel bool, writeMod
 	}
 
 	if isTopLevel {
-		if err := db.Core.Flush(); err != nil {
+		// flush and fsync before updating the header, because updating the
+		// header is what completes the transaction. without the fsync, the
+		// OS could persist the header before the data it points to, so a
+		// crash could commit a moment whose data never reached disk.
+		// WritePath does a second sync afterwards to make the header itself
+		// durable.
+		if err := db.Core.Sync(); err != nil {
 			return SlotPointer{}, err
 		}
 		fileSize, err := db.Core.Length()
@@ -304,6 +310,14 @@ func (p ArrayListSlice) readSlotPointer(db *Database, isTopLevel bool, writeMode
 	finalSlotPtr, err := db.readSlotPointer(writeMode, path, pathI+1, slotPtr)
 	if err != nil {
 		return SlotPointer{}, err
+	}
+
+	// if top level, updating the header below commits the transaction,
+	// so make everything written so far durable first
+	if isTopLevel {
+		if err := db.Core.Sync(); err != nil {
+			return SlotPointer{}, err
+		}
 	}
 
 	if err := db.Core.SeekTo(nextArrayListStart); err != nil {
