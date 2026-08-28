@@ -575,7 +575,13 @@ func (db *Database) Compact(targetCore Core) (*Database, error) {
 	}
 
 	// recursively remap the moment slot
-	remappedMoment, err := remapSlot(db.Core, target.Core, db.Header.HashSize, offsetMap, momentSlot)
+	compactor := compactor{
+		sourceCore: db.Core,
+		targetCore: target.Core,
+		hashSize:   db.Header.HashSize,
+		offsetMap:  offsetMap,
+	}
+	remappedMoment, err := compactor.remapSlot(momentSlot)
 	if err != nil {
 		return nil, fmt.Errorf("remap: %w", err)
 	}
@@ -2493,106 +2499,85 @@ func (db *Database) sortedTargetSlot(kvPos int64, target SortedMapGetTarget) (Sl
 
 // Compaction helpers
 
-func reserveBlock(targetCore Core, size int) (int64, error) {
-	offset, err := targetCore.Length()
+type objectPopulator func(sourceOffset, targetOffset int64) error
+
+type compactor struct {
+	sourceCore Core
+	targetCore Core
+	hashSize   uint16
+	offsetMap  map[int64]int64
+}
+
+func (c *compactor) reserveBlock(size int) (int64, error) {
+	offset, err := c.targetCore.Length()
 	if err != nil {
 		return 0, err
 	}
-	if err := targetCore.SeekTo(offset); err != nil {
+	if err := c.targetCore.SeekTo(offset); err != nil {
 		return 0, err
 	}
-	if err := targetCore.Write(make([]byte, size)); err != nil {
+	if err := c.targetCore.Write(make([]byte, size)); err != nil {
 		return 0, err
 	}
 	return offset, nil
 }
 
-func remapSlot(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, slot Slot) (Slot, error) {
+func (c *compactor) visitObject(sourceOffset int64, size int, populate objectPopulator) (int64, error) {
+	if targetOffset, ok := c.offsetMap[sourceOffset]; ok {
+		return targetOffset, nil
+	}
+
+	targetOffset, err := c.reserveBlock(size)
+	if err != nil {
+		return 0, err
+	}
+	c.offsetMap[sourceOffset] = targetOffset
+	if err := populate(sourceOffset, targetOffset); err != nil {
+		return 0, err
+	}
+	return targetOffset, nil
+}
+
+func (c *compactor) remapSlot(slot Slot) (Slot, error) {
+	var newOffset int64
+	var err error
 	switch slot.Tag {
 	case TagNone, TagUint, TagInt, TagFloat, TagShortBytes:
 		return slot, nil
 	case TagBytes:
-		if mapped, ok := offsetMap[slot.Value]; ok {
-			return Slot{Value: mapped, Tag: slot.Tag, Full: slot.Full}, nil
-		}
-		newOffset, err := remapBytes(sourceCore, targetCore, offsetMap, slot)
-		if err != nil {
-			return Slot{}, err
-		}
-		return Slot{Value: newOffset, Tag: slot.Tag, Full: slot.Full}, nil
+		newOffset, err = c.remapBytes(slot)
 	case TagIndex:
-		if mapped, ok := offsetMap[slot.Value]; ok {
-			return Slot{Value: mapped, Tag: slot.Tag, Full: slot.Full}, nil
-		}
-		newOffset, err := remapIndex(sourceCore, targetCore, hashSize, offsetMap, slot)
-		if err != nil {
-			return Slot{}, err
-		}
-		return Slot{Value: newOffset, Tag: slot.Tag, Full: slot.Full}, nil
+		newOffset, err = c.visitObject(slot.Value, IndexBlockSize, c.populateIndex)
 	case TagArrayList:
-		if mapped, ok := offsetMap[slot.Value]; ok {
-			return Slot{Value: mapped, Tag: slot.Tag, Full: slot.Full}, nil
-		}
-		newOffset, err := remapArrayList(sourceCore, targetCore, hashSize, offsetMap, slot)
-		if err != nil {
-			return Slot{}, err
-		}
-		return Slot{Value: newOffset, Tag: slot.Tag, Full: slot.Full}, nil
+		newOffset, err = c.visitObject(slot.Value, ArrayListHeaderLength, c.populateArrayList)
 	case TagLinkedArrayList:
-		if mapped, ok := offsetMap[slot.Value]; ok {
-			return Slot{Value: mapped, Tag: slot.Tag, Full: slot.Full}, nil
-		}
-		newOffset, err := remapBTree(sourceCore, targetCore, hashSize, offsetMap, slot)
-		if err != nil {
-			return Slot{}, err
-		}
-		return Slot{Value: newOffset, Tag: slot.Tag, Full: slot.Full}, nil
+		newOffset, err = c.visitObject(slot.Value, BTreeHeaderLength, c.populateBTree)
 	case TagHashMap, TagHashSet:
-		if mapped, ok := offsetMap[slot.Value]; ok {
-			return Slot{Value: mapped, Tag: slot.Tag, Full: slot.Full}, nil
-		}
-		newOffset, err := remapHashMapOrSet(sourceCore, targetCore, hashSize, offsetMap, slot, false)
-		if err != nil {
-			return Slot{}, err
-		}
-		return Slot{Value: newOffset, Tag: slot.Tag, Full: slot.Full}, nil
+		newOffset, err = c.visitObject(slot.Value, IndexBlockSize, c.populateHashMapOrSet)
 	case TagCountedHashMap, TagCountedHashSet:
-		if mapped, ok := offsetMap[slot.Value]; ok {
-			return Slot{Value: mapped, Tag: slot.Tag, Full: slot.Full}, nil
-		}
-		newOffset, err := remapHashMapOrSet(sourceCore, targetCore, hashSize, offsetMap, slot, true)
-		if err != nil {
-			return Slot{}, err
-		}
-		return Slot{Value: newOffset, Tag: slot.Tag, Full: slot.Full}, nil
+		newOffset, err = c.visitObject(slot.Value, IndexBlockSize+8, c.populateCountedHashMapOrSet)
 	case TagKVPair:
-		if mapped, ok := offsetMap[slot.Value]; ok {
-			return Slot{Value: mapped, Tag: slot.Tag, Full: slot.Full}, nil
-		}
-		newOffset, err := remapKvPair(sourceCore, targetCore, hashSize, offsetMap, slot)
-		if err != nil {
-			return Slot{}, err
-		}
-		return Slot{Value: newOffset, Tag: slot.Tag, Full: slot.Full}, nil
+		newOffset, err = c.visitObject(slot.Value, KeyValuePairLength(int(c.hashSize)), c.populateKvPair)
 	case TagSortedMap, TagSortedSet:
-		if mapped, ok := offsetMap[slot.Value]; ok {
-			return Slot{Value: mapped, Tag: slot.Tag, Full: slot.Full}, nil
-		}
-		newOffset, err := remapSortedMap(sourceCore, targetCore, hashSize, offsetMap, slot)
-		if err != nil {
-			return Slot{}, err
-		}
-		return Slot{Value: newOffset, Tag: slot.Tag, Full: slot.Full}, nil
+		newOffset, err = c.visitObject(slot.Value, BTreeHeaderLength, c.populateSortedMap)
 	default:
 		return Slot{}, ErrUnexpectedTag
 	}
+	if err != nil {
+		return Slot{}, err
+	}
+	return Slot{Value: newOffset, Tag: slot.Tag, Full: slot.Full}, nil
 }
 
-func remapBytes(sourceCore, targetCore Core, offsetMap map[int64]int64, slot Slot) (int64, error) {
-	if err := sourceCore.SeekTo(slot.Value); err != nil {
+func (c *compactor) remapBytes(slot Slot) (int64, error) {
+	if targetOffset, ok := c.offsetMap[slot.Value]; ok {
+		return targetOffset, nil
+	}
+
+	if err := c.sourceCore.SeekTo(slot.Value); err != nil {
 		return 0, err
 	}
-	length, err := readLong(sourceCore)
+	length, err := readLong(c.sourceCore)
 	if err != nil {
 		return 0, err
 	}
@@ -2603,14 +2588,14 @@ func remapBytes(sourceCore, targetCore Core, offsetMap map[int64]int64, slot Slo
 	}
 	totalPayload := length + formatTagSize
 
-	newOffset, err := targetCore.Length()
+	newOffset, err := c.targetCore.Length()
 	if err != nil {
 		return 0, err
 	}
-	if err := targetCore.SeekTo(newOffset); err != nil {
+	if err := c.targetCore.SeekTo(newOffset); err != nil {
 		return 0, err
 	}
-	if err := writeLong(targetCore, length); err != nil {
+	if err := writeLong(c.targetCore, length); err != nil {
 		return 0, err
 	}
 
@@ -2621,142 +2606,124 @@ func remapBytes(sourceCore, targetCore Core, offsetMap map[int64]int64, slot Slo
 			chunk = remaining
 		}
 		buf := make([]byte, chunk)
-		if err := sourceCore.Read(buf); err != nil {
+		if err := c.sourceCore.Read(buf); err != nil {
 			return 0, err
 		}
-		if err := targetCore.Write(buf); err != nil {
+		if err := c.targetCore.Write(buf); err != nil {
 			return 0, err
 		}
 		remaining -= chunk
 	}
 
-	offsetMap[slot.Value] = newOffset
+	c.offsetMap[slot.Value] = newOffset
 	return newOffset, nil
 }
 
-func remapIndex(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, slot Slot) (int64, error) {
-	if err := sourceCore.SeekTo(slot.Value); err != nil {
-		return 0, err
+func (c *compactor) populateIndex(sourceOffset, targetOffset int64) error {
+	if err := c.sourceCore.SeekTo(sourceOffset); err != nil {
+		return err
 	}
 	blockBytes := make([]byte, IndexBlockSize)
-	if err := sourceCore.Read(blockBytes); err != nil {
-		return 0, err
+	if err := c.sourceCore.Read(blockBytes); err != nil {
+		return err
 	}
-
-	newOffset, err := reserveBlock(targetCore, IndexBlockSize)
-	if err != nil {
-		return 0, err
-	}
-	offsetMap[slot.Value] = newOffset
 
 	var remappedSlots [SlotCount]Slot
 	for i := 0; i < SlotCount; i++ {
 		var sb [SlotLength]byte
 		copy(sb[:], blockBytes[i*SlotLength:(i+1)*SlotLength])
 		childSlot := SlotFromBytes(sb)
-		remapped, err := remapSlot(sourceCore, targetCore, hashSize, offsetMap, childSlot)
+		remapped, err := c.remapSlot(childSlot)
 		if err != nil {
-			return 0, err
+			return err
 		}
 		remappedSlots[i] = remapped
 	}
 
-	if err := targetCore.SeekTo(newOffset); err != nil {
-		return 0, err
+	if err := c.targetCore.SeekTo(targetOffset); err != nil {
+		return err
 	}
 	for _, s := range remappedSlots {
 		b := s.ToBytes()
-		if err := targetCore.Write(b[:]); err != nil {
-			return 0, err
+		if err := c.targetCore.Write(b[:]); err != nil {
+			return err
 		}
 	}
 
-	return newOffset, nil
+	return nil
 }
 
-func remapArrayList(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, slot Slot) (int64, error) {
-	if err := sourceCore.SeekTo(slot.Value); err != nil {
-		return 0, err
+func (c *compactor) populateArrayList(sourceOffset, targetOffset int64) error {
+	if err := c.sourceCore.SeekTo(sourceOffset); err != nil {
+		return err
 	}
 	var headerBytes [ArrayListHeaderLength]byte
-	if err := sourceCore.Read(headerBytes[:]); err != nil {
-		return 0, err
+	if err := c.sourceCore.Read(headerBytes[:]); err != nil {
+		return err
 	}
 	header, err := ArrayListHeaderFromBytes(headerBytes[:])
 	if err != nil {
-		return 0, err
+		return err
 	}
-
-	newOffset, err := reserveBlock(targetCore, ArrayListHeaderLength)
-	if err != nil {
-		return 0, err
-	}
-	offsetMap[slot.Value] = newOffset
 
 	indexSlot := Slot{Value: header.Ptr, Tag: TagIndex}
-	remappedIndex, err := remapSlot(sourceCore, targetCore, hashSize, offsetMap, indexSlot)
+	remappedIndex, err := c.remapSlot(indexSlot)
 	if err != nil {
-		return 0, err
+		return err
 	}
 
-	if err := targetCore.SeekTo(newOffset); err != nil {
-		return 0, err
+	if err := c.targetCore.SeekTo(targetOffset); err != nil {
+		return err
 	}
 	newHeader := ArrayListHeader{Ptr: remappedIndex.Value, Size: header.Size}
 	nhb := newHeader.ToBytes()
-	if err := targetCore.Write(nhb[:]); err != nil {
-		return 0, err
+	if err := c.targetCore.Write(nhb[:]); err != nil {
+		return err
 	}
 
-	return newOffset, nil
+	return nil
 }
 
-func remapBTree(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, slot Slot) (int64, error) {
-	if err := sourceCore.SeekTo(slot.Value); err != nil {
-		return 0, err
+func (c *compactor) populateBTree(sourceOffset, targetOffset int64) error {
+	if err := c.sourceCore.SeekTo(sourceOffset); err != nil {
+		return err
 	}
 	var headerBytes [BTreeHeaderLength]byte
-	if err := sourceCore.Read(headerBytes[:]); err != nil {
-		return 0, err
+	if err := c.sourceCore.Read(headerBytes[:]); err != nil {
+		return err
 	}
 	header, err := BTreeHeaderFromBytes(headerBytes[:])
 	if err != nil {
-		return 0, err
+		return err
 	}
 
-	newOffset, err := reserveBlock(targetCore, BTreeHeaderLength)
+	remappedRoot, err := c.remapBTreeNode(header.RootPtr)
 	if err != nil {
-		return 0, err
-	}
-	offsetMap[slot.Value] = newOffset
-
-	remappedRoot, err := remapBTreeNode(sourceCore, targetCore, hashSize, offsetMap, header.RootPtr)
-	if err != nil {
-		return 0, err
+		return err
 	}
 
-	if err := targetCore.SeekTo(newOffset); err != nil {
-		return 0, err
+	if err := c.targetCore.SeekTo(targetOffset); err != nil {
+		return err
 	}
 	newHeader := BTreeHeader{RootPtr: remappedRoot, Size: header.Size}
 	nhb := newHeader.ToBytes()
-	if err := targetCore.Write(nhb[:]); err != nil {
-		return 0, err
+	if err := c.targetCore.Write(nhb[:]); err != nil {
+		return err
 	}
 
-	return newOffset, nil
+	return nil
 }
 
-func remapBTreeNode(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, nodeOffset int64) (int64, error) {
-	if mapped, ok := offsetMap[nodeOffset]; ok {
+func (c *compactor) remapBTreeNode(nodeOffset int64) (int64, error) {
+	if mapped, ok := c.offsetMap[nodeOffset]; ok {
 		return mapped, nil
 	}
 
-	if err := sourceCore.SeekTo(nodeOffset); err != nil {
+	if err := c.sourceCore.SeekTo(nodeOffset); err != nil {
 		return 0, err
 	}
 	var nodeHeader [BTreeNodeHeaderSize]byte
-	if err := sourceCore.Read(nodeHeader[:]); err != nil {
+	if err := c.sourceCore.Read(nodeHeader[:]); err != nil {
 		return 0, err
 	}
 	kindInt := nodeHeader[0]
@@ -2771,149 +2738,149 @@ func remapBTreeNode(sourceCore, targetCore Core, hashSize uint16, offsetMap map[
 
 	switch kind {
 	case BTreeKindLeaf:
-		body := make([]byte, SlotLength*BTreeSlotCount)
-		if err := sourceCore.Read(body); err != nil {
-			return 0, err
-		}
-		newOffset, err := reserveBlock(targetCore, BTreeLeafBlockSize)
-		if err != nil {
-			return 0, err
-		}
-		offsetMap[nodeOffset] = newOffset
-
-		var slots [BTreeSlotCount]Slot
-		for i := 0; i < BTreeSlotCount; i++ {
-			var sb [SlotLength]byte
-			copy(sb[:], body[i*SlotLength:i*SlotLength+SlotLength])
-			remapped, err := remapSlot(sourceCore, targetCore, hashSize, offsetMap, SlotFromBytes(sb))
-			if err != nil {
-				return 0, err
-			}
-			slots[i] = remapped
-		}
-
-		if err := targetCore.SeekTo(newOffset); err != nil {
-			return 0, err
-		}
-		if err := targetCore.Write([]byte{kindInt, num}); err != nil {
-			return 0, err
-		}
-		for _, s := range slots {
-			b := s.ToBytes()
-			if err := targetCore.Write(b[:]); err != nil {
-				return 0, err
-			}
-		}
-
-		return newOffset, nil
+		return c.visitObject(nodeOffset, BTreeLeafBlockSize, func(sourceOffset, targetOffset int64) error {
+			return c.populateBTreeLeaf(sourceOffset, targetOffset, kindInt, num)
+		})
 	case BTreeKindBranch:
-		body := make([]byte, (SlotLength+8)*BTreeSlotCount)
-		if err := sourceCore.Read(body); err != nil {
-			return 0, err
-		}
-		newOffset, err := reserveBlock(targetCore, BTreeBranchBlockSize)
-		if err != nil {
-			return 0, err
-		}
-		offsetMap[nodeOffset] = newOffset
-
-		var children [BTreeSlotCount]Slot
-		for i := 0; i < BTreeSlotCount; i++ {
-			var sb [SlotLength]byte
-			copy(sb[:], body[i*SlotLength:i*SlotLength+SlotLength])
-			child := SlotFromBytes(sb)
-			// non-index children are copied verbatim, so validate the tag
-			// here; slots that go through remapSlot are validated there
-			if err := child.Tag.validate(); err != nil {
-				return 0, err
-			}
-			if child.Tag == TagIndex {
-				remappedPtr, err := remapBTreeNode(sourceCore, targetCore, hashSize, offsetMap, child.Value)
-				if err != nil {
-					return 0, err
-				}
-				children[i] = Slot{Value: remappedPtr, Tag: TagIndex, Full: child.Full}
-			} else {
-				children[i] = child
-			}
-		}
-		countsOffset := SlotLength * BTreeSlotCount
-		var counts [BTreeSlotCount]int64
-		for i := 0; i < BTreeSlotCount; i++ {
-			counts[i] = int64(binary.BigEndian.Uint64(body[countsOffset+i*8 : countsOffset+i*8+8]))
-		}
-
-		if err := targetCore.SeekTo(newOffset); err != nil {
-			return 0, err
-		}
-		if err := targetCore.Write([]byte{kindInt, num}); err != nil {
-			return 0, err
-		}
-		for _, s := range children {
-			b := s.ToBytes()
-			if err := targetCore.Write(b[:]); err != nil {
-				return 0, err
-			}
-		}
-		for _, c := range counts {
-			var cb [8]byte
-			binary.BigEndian.PutUint64(cb[:], uint64(c))
-			if err := targetCore.Write(cb[:]); err != nil {
-				return 0, err
-			}
-		}
-
-		return newOffset, nil
+		return c.visitObject(nodeOffset, BTreeBranchBlockSize, func(sourceOffset, targetOffset int64) error {
+			return c.populateBTreeBranch(sourceOffset, targetOffset, kindInt, num)
+		})
 	}
 	return 0, ErrUnreachable
 }
 
-func remapSortedMap(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, slot Slot) (int64, error) {
-	if err := sourceCore.SeekTo(slot.Value); err != nil {
-		return 0, err
+func (c *compactor) populateBTreeLeaf(sourceOffset, targetOffset int64, kind, num byte) error {
+	if err := c.sourceCore.SeekTo(sourceOffset + BTreeNodeHeaderSize); err != nil {
+		return err
+	}
+	body := make([]byte, SlotLength*BTreeSlotCount)
+	if err := c.sourceCore.Read(body); err != nil {
+		return err
+	}
+
+	var slots [BTreeSlotCount]Slot
+	for i := 0; i < BTreeSlotCount; i++ {
+		var sb [SlotLength]byte
+		copy(sb[:], body[i*SlotLength:i*SlotLength+SlotLength])
+		remapped, err := c.remapSlot(SlotFromBytes(sb))
+		if err != nil {
+			return err
+		}
+		slots[i] = remapped
+	}
+
+	if err := c.targetCore.SeekTo(targetOffset); err != nil {
+		return err
+	}
+	if err := c.targetCore.Write([]byte{kind, num}); err != nil {
+		return err
+	}
+	for _, slot := range slots {
+		b := slot.ToBytes()
+		if err := c.targetCore.Write(b[:]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *compactor) populateBTreeBranch(sourceOffset, targetOffset int64, kind, num byte) error {
+	if err := c.sourceCore.SeekTo(sourceOffset + BTreeNodeHeaderSize); err != nil {
+		return err
+	}
+	body := make([]byte, (SlotLength+8)*BTreeSlotCount)
+	if err := c.sourceCore.Read(body); err != nil {
+		return err
+	}
+
+	var children [BTreeSlotCount]Slot
+	for i := 0; i < BTreeSlotCount; i++ {
+		var sb [SlotLength]byte
+		copy(sb[:], body[i*SlotLength:i*SlotLength+SlotLength])
+		child := SlotFromBytes(sb)
+		// non-index children are copied verbatim, so validate the tag
+		// here; slots that go through remapSlot are validated there
+		if err := child.Tag.validate(); err != nil {
+			return err
+		}
+		if child.Tag == TagIndex {
+			remappedPtr, err := c.remapBTreeNode(child.Value)
+			if err != nil {
+				return err
+			}
+			children[i] = Slot{Value: remappedPtr, Tag: TagIndex, Full: child.Full}
+		} else {
+			children[i] = child
+		}
+	}
+	countsOffset := SlotLength * BTreeSlotCount
+	var counts [BTreeSlotCount]int64
+	for i := 0; i < BTreeSlotCount; i++ {
+		counts[i] = int64(binary.BigEndian.Uint64(body[countsOffset+i*8 : countsOffset+i*8+8]))
+	}
+
+	if err := c.targetCore.SeekTo(targetOffset); err != nil {
+		return err
+	}
+	if err := c.targetCore.Write([]byte{kind, num}); err != nil {
+		return err
+	}
+	for _, child := range children {
+		b := child.ToBytes()
+		if err := c.targetCore.Write(b[:]); err != nil {
+			return err
+		}
+	}
+	for _, count := range counts {
+		var cb [8]byte
+		binary.BigEndian.PutUint64(cb[:], uint64(count))
+		if err := c.targetCore.Write(cb[:]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *compactor) populateSortedMap(sourceOffset, targetOffset int64) error {
+	if err := c.sourceCore.SeekTo(sourceOffset); err != nil {
+		return err
 	}
 	var headerBytes [BTreeHeaderLength]byte
-	if err := sourceCore.Read(headerBytes[:]); err != nil {
-		return 0, err
+	if err := c.sourceCore.Read(headerBytes[:]); err != nil {
+		return err
 	}
 	header, err := BTreeHeaderFromBytes(headerBytes[:])
 	if err != nil {
-		return 0, err
+		return err
 	}
 
-	newOffset, err := reserveBlock(targetCore, BTreeHeaderLength)
+	remappedRoot, err := c.remapSortedMapNode(header.RootPtr)
 	if err != nil {
-		return 0, err
-	}
-	offsetMap[slot.Value] = newOffset
-
-	remappedRoot, err := remapSortedMapNode(sourceCore, targetCore, hashSize, offsetMap, header.RootPtr)
-	if err != nil {
-		return 0, err
+		return err
 	}
 
-	if err := targetCore.SeekTo(newOffset); err != nil {
-		return 0, err
+	if err := c.targetCore.SeekTo(targetOffset); err != nil {
+		return err
 	}
 	newHeader := BTreeHeader{RootPtr: remappedRoot, Size: header.Size}
 	nhb := newHeader.ToBytes()
-	if err := targetCore.Write(nhb[:]); err != nil {
-		return 0, err
+	if err := c.targetCore.Write(nhb[:]); err != nil {
+		return err
 	}
 
-	return newOffset, nil
+	return nil
 }
 
-func remapSortedMapNode(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, nodeOffset int64) (int64, error) {
-	if mapped, ok := offsetMap[nodeOffset]; ok {
+func (c *compactor) remapSortedMapNode(nodeOffset int64) (int64, error) {
+	if mapped, ok := c.offsetMap[nodeOffset]; ok {
 		return mapped, nil
 	}
 
-	if err := sourceCore.SeekTo(nodeOffset); err != nil {
+	if err := c.sourceCore.SeekTo(nodeOffset); err != nil {
 		return 0, err
 	}
 	var nodeHeader [BTreeNodeHeaderSize]byte
-	if err := sourceCore.Read(nodeHeader[:]); err != nil {
+	if err := c.sourceCore.Read(nodeHeader[:]); err != nil {
 		return 0, err
 	}
 	kindInt := nodeHeader[0]
@@ -2928,211 +2895,209 @@ func remapSortedMapNode(sourceCore, targetCore Core, hashSize uint16, offsetMap 
 
 	switch kind {
 	case BTreeKindLeaf:
-		body := make([]byte, SlotLength*BTreeSlotCount)
-		if err := sourceCore.Read(body); err != nil {
-			return 0, err
-		}
-		newOffset, err := reserveBlock(targetCore, SortedLeafBlockSize)
-		if err != nil {
-			return 0, err
-		}
-		offsetMap[nodeOffset] = newOffset
-
-		var entries [BTreeSlotCount]Slot
-		for i := 0; i < BTreeSlotCount; i++ {
-			var sb [SlotLength]byte
-			copy(sb[:], body[i*SlotLength:i*SlotLength+SlotLength])
-			remapped, err := remapSlot(sourceCore, targetCore, hashSize, offsetMap, SlotFromBytes(sb))
-			if err != nil {
-				return 0, err
-			}
-			entries[i] = remapped
-		}
-
-		if err := targetCore.SeekTo(newOffset); err != nil {
-			return 0, err
-		}
-		if err := targetCore.Write([]byte{kindInt, num}); err != nil {
-			return 0, err
-		}
-		for _, s := range entries {
-			b := s.ToBytes()
-			if err := targetCore.Write(b[:]); err != nil {
-				return 0, err
-			}
-		}
-
-		return newOffset, nil
+		return c.visitObject(nodeOffset, SortedLeafBlockSize, func(sourceOffset, targetOffset int64) error {
+			return c.populateSortedMapLeaf(sourceOffset, targetOffset, kindInt, num)
+		})
 	case BTreeKindBranch:
-		body := make([]byte, (SlotLength*2+8)*BTreeSlotCount)
-		if err := sourceCore.Read(body); err != nil {
-			return 0, err
-		}
-		newOffset, err := reserveBlock(targetCore, SortedBranchBlockSize)
-		if err != nil {
-			return 0, err
-		}
-		offsetMap[nodeOffset] = newOffset
-
-		var children [BTreeSlotCount]Slot
-		for i := 0; i < BTreeSlotCount; i++ {
-			var sb [SlotLength]byte
-			copy(sb[:], body[i*SlotLength:i*SlotLength+SlotLength])
-			child := SlotFromBytes(sb)
-			// non-index children are copied verbatim, so validate the tag
-			// here; slots that go through remapSlot are validated there
-			if err := child.Tag.validate(); err != nil {
-				return 0, err
-			}
-			if child.Tag == TagIndex {
-				remappedPtr, err := remapSortedMapNode(sourceCore, targetCore, hashSize, offsetMap, child.Value)
-				if err != nil {
-					return 0, err
-				}
-				children[i] = Slot{Value: remappedPtr, Tag: TagIndex, Full: child.Full}
-			} else {
-				children[i] = child
-			}
-		}
-		sepOffset := SlotLength * BTreeSlotCount
-		var separators [BTreeSlotCount]Slot
-		for i := 0; i < BTreeSlotCount; i++ {
-			var sb [SlotLength]byte
-			copy(sb[:], body[sepOffset+i*SlotLength:sepOffset+i*SlotLength+SlotLength])
-			remapped, err := remapSlot(sourceCore, targetCore, hashSize, offsetMap, SlotFromBytes(sb))
-			if err != nil {
-				return 0, err
-			}
-			separators[i] = remapped
-		}
-		countsOffset := SlotLength * 2 * BTreeSlotCount
-		var counts [BTreeSlotCount]int64
-		for i := 0; i < BTreeSlotCount; i++ {
-			counts[i] = int64(binary.BigEndian.Uint64(body[countsOffset+i*8 : countsOffset+i*8+8]))
-		}
-
-		if err := targetCore.SeekTo(newOffset); err != nil {
-			return 0, err
-		}
-		if err := targetCore.Write([]byte{kindInt, num}); err != nil {
-			return 0, err
-		}
-		for _, s := range children {
-			b := s.ToBytes()
-			if err := targetCore.Write(b[:]); err != nil {
-				return 0, err
-			}
-		}
-		for _, s := range separators {
-			b := s.ToBytes()
-			if err := targetCore.Write(b[:]); err != nil {
-				return 0, err
-			}
-		}
-		for _, c := range counts {
-			var cb [8]byte
-			binary.BigEndian.PutUint64(cb[:], uint64(c))
-			if err := targetCore.Write(cb[:]); err != nil {
-				return 0, err
-			}
-		}
-
-		return newOffset, nil
+		return c.visitObject(nodeOffset, SortedBranchBlockSize, func(sourceOffset, targetOffset int64) error {
+			return c.populateSortedMapBranch(sourceOffset, targetOffset, kindInt, num)
+		})
 	}
 	return 0, ErrUnreachable
 }
 
-func remapHashMapOrSet(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, slot Slot, counted bool) (int64, error) {
-	if err := sourceCore.SeekTo(slot.Value); err != nil {
-		return 0, err
+func (c *compactor) populateSortedMapLeaf(sourceOffset, targetOffset int64, kind, num byte) error {
+	if err := c.sourceCore.SeekTo(sourceOffset + BTreeNodeHeaderSize); err != nil {
+		return err
+	}
+	body := make([]byte, SlotLength*BTreeSlotCount)
+	if err := c.sourceCore.Read(body); err != nil {
+		return err
+	}
+
+	var entries [BTreeSlotCount]Slot
+	for i := 0; i < BTreeSlotCount; i++ {
+		var sb [SlotLength]byte
+		copy(sb[:], body[i*SlotLength:i*SlotLength+SlotLength])
+		remapped, err := c.remapSlot(SlotFromBytes(sb))
+		if err != nil {
+			return err
+		}
+		entries[i] = remapped
+	}
+
+	if err := c.targetCore.SeekTo(targetOffset); err != nil {
+		return err
+	}
+	if err := c.targetCore.Write([]byte{kind, num}); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		b := entry.ToBytes()
+		if err := c.targetCore.Write(b[:]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *compactor) populateSortedMapBranch(sourceOffset, targetOffset int64, kind, num byte) error {
+	if err := c.sourceCore.SeekTo(sourceOffset + BTreeNodeHeaderSize); err != nil {
+		return err
+	}
+	body := make([]byte, (SlotLength*2+8)*BTreeSlotCount)
+	if err := c.sourceCore.Read(body); err != nil {
+		return err
+	}
+
+	var children [BTreeSlotCount]Slot
+	for i := 0; i < BTreeSlotCount; i++ {
+		var sb [SlotLength]byte
+		copy(sb[:], body[i*SlotLength:i*SlotLength+SlotLength])
+		child := SlotFromBytes(sb)
+		// non-index children are copied verbatim, so validate the tag
+		// here; slots that go through remapSlot are validated there
+		if err := child.Tag.validate(); err != nil {
+			return err
+		}
+		if child.Tag == TagIndex {
+			remappedPtr, err := c.remapSortedMapNode(child.Value)
+			if err != nil {
+				return err
+			}
+			children[i] = Slot{Value: remappedPtr, Tag: TagIndex, Full: child.Full}
+		} else {
+			children[i] = child
+		}
+	}
+	separatorOffset := SlotLength * BTreeSlotCount
+	var separators [BTreeSlotCount]Slot
+	for i := 0; i < BTreeSlotCount; i++ {
+		var sb [SlotLength]byte
+		copy(sb[:], body[separatorOffset+i*SlotLength:separatorOffset+i*SlotLength+SlotLength])
+		remapped, err := c.remapSlot(SlotFromBytes(sb))
+		if err != nil {
+			return err
+		}
+		separators[i] = remapped
+	}
+	countsOffset := SlotLength * 2 * BTreeSlotCount
+	var counts [BTreeSlotCount]int64
+	for i := 0; i < BTreeSlotCount; i++ {
+		counts[i] = int64(binary.BigEndian.Uint64(body[countsOffset+i*8 : countsOffset+i*8+8]))
+	}
+
+	if err := c.targetCore.SeekTo(targetOffset); err != nil {
+		return err
+	}
+	if err := c.targetCore.Write([]byte{kind, num}); err != nil {
+		return err
+	}
+	for _, child := range children {
+		b := child.ToBytes()
+		if err := c.targetCore.Write(b[:]); err != nil {
+			return err
+		}
+	}
+	for _, separator := range separators {
+		b := separator.ToBytes()
+		if err := c.targetCore.Write(b[:]); err != nil {
+			return err
+		}
+	}
+	for _, count := range counts {
+		var cb [8]byte
+		binary.BigEndian.PutUint64(cb[:], uint64(count))
+		if err := c.targetCore.Write(cb[:]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *compactor) populateHashMapOrSet(sourceOffset, targetOffset int64) error {
+	return c.populateHashMapOrSetCounted(sourceOffset, targetOffset, false)
+}
+
+func (c *compactor) populateCountedHashMapOrSet(sourceOffset, targetOffset int64) error {
+	return c.populateHashMapOrSetCounted(sourceOffset, targetOffset, true)
+}
+
+func (c *compactor) populateHashMapOrSetCounted(sourceOffset, targetOffset int64, counted bool) error {
+	if err := c.sourceCore.SeekTo(sourceOffset); err != nil {
+		return err
 	}
 
 	var countValue int64 = -1
 	if counted {
 		var err error
-		countValue, err = readLong(sourceCore)
+		countValue, err = readLong(c.sourceCore)
 		if err != nil {
-			return 0, err
+			return err
 		}
 	}
 
 	blockBytes := make([]byte, IndexBlockSize)
-	if err := sourceCore.Read(blockBytes); err != nil {
-		return 0, err
+	if err := c.sourceCore.Read(blockBytes); err != nil {
+		return err
 	}
-
-	blockSize := IndexBlockSize
-	if counted {
-		blockSize += 8
-	}
-	newOffset, err := reserveBlock(targetCore, blockSize)
-	if err != nil {
-		return 0, err
-	}
-	offsetMap[slot.Value] = newOffset
 
 	var remappedSlots [SlotCount]Slot
 	for i := 0; i < SlotCount; i++ {
 		var sb [SlotLength]byte
 		copy(sb[:], blockBytes[i*SlotLength:(i+1)*SlotLength])
 		childSlot := SlotFromBytes(sb)
-		remapped, err := remapSlot(sourceCore, targetCore, hashSize, offsetMap, childSlot)
+		remapped, err := c.remapSlot(childSlot)
 		if err != nil {
-			return 0, err
+			return err
 		}
 		remappedSlots[i] = remapped
 	}
 
-	if err := targetCore.SeekTo(newOffset); err != nil {
-		return 0, err
+	if err := c.targetCore.SeekTo(targetOffset); err != nil {
+		return err
 	}
 	if counted {
-		if err := writeLong(targetCore, countValue); err != nil {
-			return 0, err
+		if err := writeLong(c.targetCore, countValue); err != nil {
+			return err
 		}
 	}
 	for _, s := range remappedSlots {
 		b := s.ToBytes()
-		if err := targetCore.Write(b[:]); err != nil {
-			return 0, err
+		if err := c.targetCore.Write(b[:]); err != nil {
+			return err
 		}
 	}
 
-	return newOffset, nil
+	return nil
 }
 
-func remapKvPair(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, slot Slot) (int64, error) {
-	if err := sourceCore.SeekTo(slot.Value); err != nil {
-		return 0, err
+func (c *compactor) populateKvPair(sourceOffset, targetOffset int64) error {
+	if err := c.sourceCore.SeekTo(sourceOffset); err != nil {
+		return err
 	}
-	kvPairBytes := make([]byte, KeyValuePairLength(int(hashSize)))
-	if err := sourceCore.Read(kvPairBytes); err != nil {
-		return 0, err
+	kvPairBytes := make([]byte, KeyValuePairLength(int(c.hashSize)))
+	if err := c.sourceCore.Read(kvPairBytes); err != nil {
+		return err
 	}
-	kvPair := KeyValuePairFromBytes(kvPairBytes, int(hashSize))
+	kvPair := KeyValuePairFromBytes(kvPairBytes, int(c.hashSize))
 
-	newOffset, err := reserveBlock(targetCore, KeyValuePairLength(int(hashSize)))
+	remappedKey, err := c.remapSlot(kvPair.KeySlot)
 	if err != nil {
-		return 0, err
+		return err
 	}
-	offsetMap[slot.Value] = newOffset
-
-	remappedKey, err := remapSlot(sourceCore, targetCore, hashSize, offsetMap, kvPair.KeySlot)
+	remappedValue, err := c.remapSlot(kvPair.ValueSlot)
 	if err != nil {
-		return 0, err
-	}
-	remappedValue, err := remapSlot(sourceCore, targetCore, hashSize, offsetMap, kvPair.ValueSlot)
-	if err != nil {
-		return 0, err
+		return err
 	}
 
-	if err := targetCore.SeekTo(newOffset); err != nil {
-		return 0, err
+	if err := c.targetCore.SeekTo(targetOffset); err != nil {
+		return err
 	}
 	newKvPair := KeyValuePair{ValueSlot: remappedValue, KeySlot: remappedKey, Hash: kvPair.Hash}
-	if err := targetCore.Write(newKvPair.ToBytes()); err != nil {
-		return 0, err
+	if err := c.targetCore.Write(newKvPair.ToBytes()); err != nil {
+		return err
 	}
 
-	return newOffset, nil
+	return nil
 }
