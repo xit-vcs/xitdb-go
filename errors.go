@@ -4,6 +4,7 @@ import "errors"
 
 var (
 	ErrInvalidDatabase          = errors.New("invalid database")
+	ErrTruncatedDatabase        = errors.New("truncated database")
 	ErrInvalidVersion           = errors.New("invalid version")
 	ErrInvalidHashSize          = errors.New("invalid hash size")
 	ErrKeyNotFound              = errors.New("key not found")

@@ -168,6 +168,18 @@ func (h TopLevelArrayListHeader) ToBytes() [TopLevelArrayListHeaderLength]byte {
 	return buf
 }
 
+func TopLevelArrayListHeaderFromBytes(b []byte) (TopLevelArrayListHeader, error) {
+	parent, err := ArrayListHeaderFromBytes(b[:ArrayListHeaderLength])
+	if err != nil {
+		return TopLevelArrayListHeader{}, err
+	}
+	fileSize := int64(binary.BigEndian.Uint64(b[ArrayListHeaderLength:]))
+	if fileSize < 0 {
+		return TopLevelArrayListHeader{}, ErrExpectedUnsignedLong
+	}
+	return TopLevelArrayListHeader{FileSize: fileSize, Parent: parent}, nil
+}
+
 // BTreeHeader: a root pointer plus the element count (backs LinkedArrayList)
 
 const BTreeHeaderLength = 16
@@ -620,40 +632,43 @@ func (db *Database) truncate() error {
 		return nil
 	}
 
-	rc := &ReadCursor{
-		SlotPtr: SlotPointer{Position: nil, Slot: Slot{Value: int64(DatabaseStart), Tag: db.Header.Tag}},
-		DB:      db,
-	}
-	wc := &WriteCursor{ReadCursor: rc}
-	listSize, err := wc.Count()
-	if err != nil {
+	if err := db.Core.SeekTo(int64(DatabaseStart)); err != nil {
 		return err
 	}
-	if listSize == 0 {
-		return nil
+	var headerBytes [TopLevelArrayListHeaderLength]byte
+	if err := db.Core.Read(headerBytes[:]); err != nil {
+		return err
+	}
+	header, err := TopLevelArrayListHeaderFromBytes(headerBytes[:])
+	if err != nil {
+		return err
 	}
 
-	if err := db.Core.SeekTo(int64(DatabaseStart) + int64(ArrayListHeaderLength)); err != nil {
-		return err
+	minimumSize := int64(DatabaseStart + TopLevelArrayListHeaderLength + IndexBlockSize)
+	committedSize := header.FileSize
+	if committedSize == 0 {
+		if header.Parent.Size != 0 {
+			return ErrInvalidDatabase
+		}
+		committedSize = minimumSize
 	}
-	headerFileSize, err := readLong(db.Core)
-	if err != nil {
-		return err
-	}
-	if headerFileSize == 0 {
-		return nil
+	if committedSize < minimumSize {
+		return ErrInvalidDatabase
 	}
 
 	fileSize, err := db.Core.Length()
 	if err != nil {
 		return err
 	}
-	if fileSize == headerFileSize {
+	if fileSize < committedSize {
+		return ErrTruncatedDatabase
+	}
+	if fileSize == committedSize {
 		return nil
 	}
 
 	// ignore error because the file may be open in read-only mode
-	_ = db.Core.SetLength(headerFileSize)
+	_ = db.Core.SetLength(committedSize)
 	return nil
 }
 
