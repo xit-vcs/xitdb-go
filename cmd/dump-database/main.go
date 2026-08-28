@@ -431,9 +431,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error opening file: %v\n", err)
 		os.Exit(1)
 	}
-	defer f.Close()
 
 	core := xitdb.NewCoreBufferedFile(f)
+	defer core.Close()
 
 	header, err := xitdb.ReadHeader(core)
 	if err != nil {

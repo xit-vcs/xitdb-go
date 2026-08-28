@@ -40,10 +40,10 @@ f, err := os.OpenFile("main.db", os.O_RDWR|os.O_CREATE, 0644)
 if err != nil {
     log.Fatal(err)
 }
-defer f.Close()
 
 // init the db
 core := xitdb.NewCoreBufferedFile(f)
+defer core.Close()
 hasher := xitdb.Hasher{Hash: sha1.New()}
 db, err := xitdb.NewDatabase(core, hasher)
 if err != nil {
@@ -211,6 +211,8 @@ A `Database` is initialized with an implementation of the `Core` interface, whic
 * `CoreBufferedFile` databases, like in the example above, write to a file while using an in-memory buffer to dramatically improve performance. This is highly recommended if you want to create a file-based database. Initialize with `NewCoreBufferedFile(f)` where `f` is an `*os.File`.
 * `CoreFile` databases use no buffering when reading and writing data. Initialize with `NewCoreFile(f)`. This is almost never necessary but it's useful as a benchmark comparison with `CoreBufferedFile` databases.
 * `CoreMemory` databases work completely in memory. Initialize with `NewCoreMemory()`.
+
+Every `Core` implements `io.Closer` and owns the file passed to its constructor. Call `Close` on the core rather than on the underlying file so buffered data is flushed before the file is closed.
 
 Usually, you want to use a top-level `ArrayList` like in the example above, because that allows you to store a reference to each copy of the database (which I call a "moment"). This is how it supports transactions, despite not having any rollback journal or write-ahead log. It's an append-only database, so the data you are writing is invisible to any reader until the very last step, when the top-level list's header is updated.
 
@@ -934,9 +936,9 @@ f, err := os.OpenFile("main.db", os.O_RDWR|os.O_CREATE, 0644)
 if err != nil {
     log.Fatal(err)
 }
-defer f.Close()
 
 core := xitdb.NewCoreFile(f)
+defer core.Close()
 hasher := xitdb.Hasher{Hash: sha1.New()}
 db, err := xitdb.NewDatabase(core, hasher)
 if err != nil {
@@ -1026,9 +1028,9 @@ compactFile, err := os.OpenFile("compact.db", os.O_RDWR|os.O_CREATE, 0644)
 if err != nil {
     log.Fatal(err)
 }
-defer compactFile.Close()
 
 compactCore := xitdb.NewCoreBufferedFile(compactFile)
+defer compactCore.Close()
 compactDb, err := db.Compact(compactCore)
 if err != nil {
     log.Fatal(err)

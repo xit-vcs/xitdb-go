@@ -39,9 +39,9 @@ func TestHighLevelApi(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer os.Remove(f.Name())
-		defer f.Close()
 
 		core := NewCoreFile(f)
+		defer core.Close()
 		hasher := sha1Hasher()
 		testHighLevelApi(t, core, hasher, f)
 	}
@@ -53,9 +53,9 @@ func TestHighLevelApi(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer os.Remove(f.Name())
-		defer f.Close()
 
 		core := NewCoreBufferedFileWithSize(f, 1024)
+		defer core.Close()
 		hasher := sha1Hasher()
 		testHighLevelApi(t, core, hasher, f)
 	}
@@ -125,9 +125,9 @@ func TestReadDatabaseFromResources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
 
 	core := NewCoreFile(f)
+	defer core.Close()
 	hasher := sha1Hasher()
 	db, err := NewDatabase(core, hasher)
 	if err != nil {
@@ -557,9 +557,9 @@ func TestMultithreading(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
 
 	core := NewCoreFile(f)
+	defer core.Close()
 	hasher := sha1Hasher()
 	db, err := NewDatabase(core, hasher)
 	if err != nil {
@@ -588,9 +588,9 @@ func TestMultithreading(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		defer f2.Close()
 
 		core2 := NewCoreFile(f2)
+		defer core2.Close()
 		db2, err := NewDatabase(core2, hasher)
 		if err != nil {
 			t.Error(err)
@@ -1634,8 +1634,8 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer readOnlyFile.Close()
 			readOnlyCore := NewCoreFile(readOnlyFile)
+			defer readOnlyCore.Close()
 			_, err = NewDatabase(readOnlyCore, hasher)
 			if err != nil {
 				t.Fatal(err)
@@ -2175,16 +2175,16 @@ func TestCompaction(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer os.Remove(sf.Name())
-		defer sf.Close()
 		tf, err := os.CreateTemp("", "compact_target")
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer os.Remove(tf.Name())
-		defer tf.Close()
 
 		sourceCore := NewCoreFile(sf)
 		targetCore := NewCoreFile(tf)
+		defer sourceCore.Close()
+		defer targetCore.Close()
 		hasher := sha1Hasher()
 		testCompaction(t, sourceCore, targetCore, hasher, true, maxRead)
 	}
@@ -2196,16 +2196,16 @@ func TestCompaction(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer os.Remove(sf.Name())
-		defer sf.Close()
 		tf, err := os.CreateTemp("", "compact_target")
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer os.Remove(tf.Name())
-		defer tf.Close()
 
 		sourceCore := NewCoreBufferedFile(sf)
 		targetCore := NewCoreBufferedFile(tf)
+		defer sourceCore.Close()
+		defer targetCore.Close()
 		hasher := sha1Hasher()
 		testCompaction(t, sourceCore, targetCore, hasher, true, maxRead)
 	}
@@ -3180,8 +3180,9 @@ func TestSortedMap(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer os.Remove(f.Name())
-		defer f.Close()
-		testSortedMap(t, NewCoreFile(f), sha1Hasher())
+		core := NewCoreFile(f)
+		defer core.Close()
+		testSortedMap(t, core, sha1Hasher())
 	}
 	// CoreBufferedFile
 	{
@@ -3190,8 +3191,9 @@ func TestSortedMap(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer os.Remove(f.Name())
-		defer f.Close()
-		testSortedMap(t, NewCoreBufferedFileWithSize(f, 1024), sha1Hasher())
+		core := NewCoreBufferedFileWithSize(f, 1024)
+		defer core.Close()
+		testSortedMap(t, core, sha1Hasher())
 	}
 }
 
@@ -3743,8 +3745,9 @@ func TestAllFrom(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer os.Remove(f.Name())
-		defer f.Close()
-		testAllFrom(t, NewCoreFile(f), sha1Hasher())
+		core := NewCoreFile(f)
+		defer core.Close()
+		testAllFrom(t, core, sha1Hasher())
 	}
 	// CoreBufferedFile
 	{
@@ -3753,8 +3756,9 @@ func TestAllFrom(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer os.Remove(f.Name())
-		defer f.Close()
-		testAllFrom(t, NewCoreBufferedFileWithSize(f, 1024), sha1Hasher())
+		core := NewCoreBufferedFileWithSize(f, 1024)
+		defer core.Close()
+		testAllFrom(t, core, sha1Hasher())
 	}
 }
 

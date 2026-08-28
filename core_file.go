@@ -48,3 +48,7 @@ func (c *CoreFile) Flush() error {
 func (c *CoreFile) Sync() error {
 	return c.File.Sync()
 }
+
+func (c *CoreFile) Close() error {
+	return c.File.Close()
+}

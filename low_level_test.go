@@ -25,9 +25,9 @@ func TestLowLevelApi(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer os.Remove(f.Name())
-		defer f.Close()
 
 		core := NewCoreFile(f)
+		defer core.Close()
 		hasher := sha1Hasher()
 		testLowLevelApi(t, core, hasher)
 	}
@@ -39,9 +39,9 @@ func TestLowLevelApi(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer os.Remove(f.Name())
-		defer f.Close()
 
 		core := NewCoreBufferedFileWithSize(f, 1024)
+		defer core.Close()
 		hasher := sha1Hasher()
 		testLowLevelApi(t, core, hasher)
 	}

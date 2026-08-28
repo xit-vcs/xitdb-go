@@ -80,3 +80,7 @@ func (m *CoreMemory) Flush() error {
 func (m *CoreMemory) Sync() error {
 	return nil
 }
+
+func (m *CoreMemory) Close() error {
+	return nil
+}

@@ -1,8 +1,12 @@
 package xitdb
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"io"
+)
 
 type Core interface {
+	io.Closer
 	Read(p []byte) error
 	Write(p []byte) error
 	Length() (int64, error)
