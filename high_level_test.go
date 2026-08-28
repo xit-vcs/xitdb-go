@@ -2444,7 +2444,48 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				if err != nil {
 					return err
 				}
-				return moment.Put("key1", NewString("final_value"))
+				if err := moment.Put("key1", NewString("final_value")); err != nil {
+					return err
+				}
+
+				// cycles must survive compaction rather than causing the
+				// remapper to recurse indefinitely.
+				if err := moment.Put("self", moment.Slot()); err != nil {
+					return err
+				}
+
+				cyclicListCursor, err := moment.PutCursor("cyclic-list")
+				if err != nil {
+					return err
+				}
+				cyclicList, err := NewWriteArrayList(cyclicListCursor)
+				if err != nil {
+					return err
+				}
+				if err := cyclicList.Append(cyclicList.Slot()); err != nil {
+					return err
+				}
+
+				mapACursor, err := moment.PutCursor("map-a")
+				if err != nil {
+					return err
+				}
+				mapA, err := NewWriteHashMap(mapACursor)
+				if err != nil {
+					return err
+				}
+				mapBCursor, err := moment.PutCursor("map-b")
+				if err != nil {
+					return err
+				}
+				mapB, err := NewWriteHashMap(mapBCursor)
+				if err != nil {
+					return err
+				}
+				if err := mapA.Put("map-b", mapB.Slot()); err != nil {
+					return err
+				}
+				return mapB.Put("map-a", mapA.Slot())
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -2487,6 +2528,50 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 		if err != nil {
 			t.Fatal(err)
 		}
+
+		// self-references and mutual references point back to the same compacted
+		// objects rather than duplicate objects or dangling source offsets.
+		selfCursor, err := moment.GetCursor("self")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertEqual(t, momentCursor.Slot(), selfCursor.Slot())
+
+		cyclicListCursor, err := moment.GetCursor("cyclic-list")
+		if err != nil {
+			t.Fatal(err)
+		}
+		cyclicList, err := NewReadArrayList(cyclicListCursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cyclicSlot, err := cyclicList.GetSlot(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertEqual(t, cyclicListCursor.Slot(), cyclicSlot)
+
+		mapACursor, err := moment.GetCursor("map-a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mapA, err := NewReadHashMap(mapACursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mapBCursor, err := mapA.GetCursor("map-b")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mapB, err := NewReadHashMap(mapBCursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mapASlot, err := mapB.GetSlot("map-a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertEqual(t, mapACursor.Slot(), mapASlot)
 
 		key1Cursor, err := moment.GetCursor("key1")
 		if err != nil {

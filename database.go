@@ -2493,6 +2493,20 @@ func (db *Database) sortedTargetSlot(kvPos int64, target SortedMapGetTarget) (Sl
 
 // Compaction helpers
 
+func reserveBlock(targetCore Core, size int) (int64, error) {
+	offset, err := targetCore.Length()
+	if err != nil {
+		return 0, err
+	}
+	if err := targetCore.SeekTo(offset); err != nil {
+		return 0, err
+	}
+	if err := targetCore.Write(make([]byte, size)); err != nil {
+		return 0, err
+	}
+	return offset, nil
+}
+
 func remapSlot(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64]int64, slot Slot) (Slot, error) {
 	switch slot.Tag {
 	case TagNone, TagUint, TagInt, TagFloat, TagShortBytes:
@@ -2501,11 +2515,10 @@ func remapSlot(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64
 		if mapped, ok := offsetMap[slot.Value]; ok {
 			return Slot{Value: mapped, Tag: slot.Tag, Full: slot.Full}, nil
 		}
-		newOffset, err := remapBytes(sourceCore, targetCore, slot)
+		newOffset, err := remapBytes(sourceCore, targetCore, offsetMap, slot)
 		if err != nil {
 			return Slot{}, err
 		}
-		offsetMap[slot.Value] = newOffset
 		return Slot{Value: newOffset, Tag: slot.Tag, Full: slot.Full}, nil
 	case TagIndex:
 		if mapped, ok := offsetMap[slot.Value]; ok {
@@ -2515,7 +2528,6 @@ func remapSlot(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64
 		if err != nil {
 			return Slot{}, err
 		}
-		offsetMap[slot.Value] = newOffset
 		return Slot{Value: newOffset, Tag: slot.Tag, Full: slot.Full}, nil
 	case TagArrayList:
 		if mapped, ok := offsetMap[slot.Value]; ok {
@@ -2525,7 +2537,6 @@ func remapSlot(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64
 		if err != nil {
 			return Slot{}, err
 		}
-		offsetMap[slot.Value] = newOffset
 		return Slot{Value: newOffset, Tag: slot.Tag, Full: slot.Full}, nil
 	case TagLinkedArrayList:
 		if mapped, ok := offsetMap[slot.Value]; ok {
@@ -2535,7 +2546,6 @@ func remapSlot(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64
 		if err != nil {
 			return Slot{}, err
 		}
-		offsetMap[slot.Value] = newOffset
 		return Slot{Value: newOffset, Tag: slot.Tag, Full: slot.Full}, nil
 	case TagHashMap, TagHashSet:
 		if mapped, ok := offsetMap[slot.Value]; ok {
@@ -2545,7 +2555,6 @@ func remapSlot(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64
 		if err != nil {
 			return Slot{}, err
 		}
-		offsetMap[slot.Value] = newOffset
 		return Slot{Value: newOffset, Tag: slot.Tag, Full: slot.Full}, nil
 	case TagCountedHashMap, TagCountedHashSet:
 		if mapped, ok := offsetMap[slot.Value]; ok {
@@ -2555,7 +2564,6 @@ func remapSlot(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64
 		if err != nil {
 			return Slot{}, err
 		}
-		offsetMap[slot.Value] = newOffset
 		return Slot{Value: newOffset, Tag: slot.Tag, Full: slot.Full}, nil
 	case TagKVPair:
 		if mapped, ok := offsetMap[slot.Value]; ok {
@@ -2565,7 +2573,6 @@ func remapSlot(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64
 		if err != nil {
 			return Slot{}, err
 		}
-		offsetMap[slot.Value] = newOffset
 		return Slot{Value: newOffset, Tag: slot.Tag, Full: slot.Full}, nil
 	case TagSortedMap, TagSortedSet:
 		if mapped, ok := offsetMap[slot.Value]; ok {
@@ -2575,14 +2582,13 @@ func remapSlot(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int64
 		if err != nil {
 			return Slot{}, err
 		}
-		offsetMap[slot.Value] = newOffset
 		return Slot{Value: newOffset, Tag: slot.Tag, Full: slot.Full}, nil
 	default:
 		return Slot{}, ErrUnexpectedTag
 	}
 }
 
-func remapBytes(sourceCore, targetCore Core, slot Slot) (int64, error) {
+func remapBytes(sourceCore, targetCore Core, offsetMap map[int64]int64, slot Slot) (int64, error) {
 	if err := sourceCore.SeekTo(slot.Value); err != nil {
 		return 0, err
 	}
@@ -2624,6 +2630,7 @@ func remapBytes(sourceCore, targetCore Core, slot Slot) (int64, error) {
 		remaining -= chunk
 	}
 
+	offsetMap[slot.Value] = newOffset
 	return newOffset, nil
 }
 
@@ -2635,6 +2642,12 @@ func remapIndex(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int6
 	if err := sourceCore.Read(blockBytes); err != nil {
 		return 0, err
 	}
+
+	newOffset, err := reserveBlock(targetCore, IndexBlockSize)
+	if err != nil {
+		return 0, err
+	}
+	offsetMap[slot.Value] = newOffset
 
 	var remappedSlots [SlotCount]Slot
 	for i := 0; i < SlotCount; i++ {
@@ -2648,10 +2661,6 @@ func remapIndex(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int6
 		remappedSlots[i] = remapped
 	}
 
-	newOffset, err := targetCore.Length()
-	if err != nil {
-		return 0, err
-	}
 	if err := targetCore.SeekTo(newOffset); err != nil {
 		return 0, err
 	}
@@ -2678,16 +2687,18 @@ func remapArrayList(sourceCore, targetCore Core, hashSize uint16, offsetMap map[
 		return 0, err
 	}
 
+	newOffset, err := reserveBlock(targetCore, ArrayListHeaderLength)
+	if err != nil {
+		return 0, err
+	}
+	offsetMap[slot.Value] = newOffset
+
 	indexSlot := Slot{Value: header.Ptr, Tag: TagIndex}
 	remappedIndex, err := remapSlot(sourceCore, targetCore, hashSize, offsetMap, indexSlot)
 	if err != nil {
 		return 0, err
 	}
 
-	newOffset, err := targetCore.Length()
-	if err != nil {
-		return 0, err
-	}
 	if err := targetCore.SeekTo(newOffset); err != nil {
 		return 0, err
 	}
@@ -2713,15 +2724,17 @@ func remapBTree(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int6
 		return 0, err
 	}
 
+	newOffset, err := reserveBlock(targetCore, BTreeHeaderLength)
+	if err != nil {
+		return 0, err
+	}
+	offsetMap[slot.Value] = newOffset
+
 	remappedRoot, err := remapBTreeNode(sourceCore, targetCore, hashSize, offsetMap, header.RootPtr)
 	if err != nil {
 		return 0, err
 	}
 
-	newOffset, err := targetCore.Length()
-	if err != nil {
-		return 0, err
-	}
 	if err := targetCore.SeekTo(newOffset); err != nil {
 		return 0, err
 	}
@@ -2752,6 +2765,9 @@ func remapBTreeNode(sourceCore, targetCore Core, hashSize uint16, offsetMap map[
 	}
 	kind := BTreeNodeKind(kindInt)
 	num := nodeHeader[1]
+	if num > BTreeSlotCount {
+		return 0, ErrInvalidBTreeNode
+	}
 
 	switch kind {
 	case BTreeKindLeaf:
@@ -2759,6 +2775,12 @@ func remapBTreeNode(sourceCore, targetCore Core, hashSize uint16, offsetMap map[
 		if err := sourceCore.Read(body); err != nil {
 			return 0, err
 		}
+		newOffset, err := reserveBlock(targetCore, BTreeLeafBlockSize)
+		if err != nil {
+			return 0, err
+		}
+		offsetMap[nodeOffset] = newOffset
+
 		var slots [BTreeSlotCount]Slot
 		for i := 0; i < BTreeSlotCount; i++ {
 			var sb [SlotLength]byte
@@ -2770,10 +2792,6 @@ func remapBTreeNode(sourceCore, targetCore Core, hashSize uint16, offsetMap map[
 			slots[i] = remapped
 		}
 
-		newOffset, err := targetCore.Length()
-		if err != nil {
-			return 0, err
-		}
 		if err := targetCore.SeekTo(newOffset); err != nil {
 			return 0, err
 		}
@@ -2787,13 +2805,18 @@ func remapBTreeNode(sourceCore, targetCore Core, hashSize uint16, offsetMap map[
 			}
 		}
 
-		offsetMap[nodeOffset] = newOffset
 		return newOffset, nil
 	case BTreeKindBranch:
 		body := make([]byte, (SlotLength+8)*BTreeSlotCount)
 		if err := sourceCore.Read(body); err != nil {
 			return 0, err
 		}
+		newOffset, err := reserveBlock(targetCore, BTreeBranchBlockSize)
+		if err != nil {
+			return 0, err
+		}
+		offsetMap[nodeOffset] = newOffset
+
 		var children [BTreeSlotCount]Slot
 		for i := 0; i < BTreeSlotCount; i++ {
 			var sb [SlotLength]byte
@@ -2820,10 +2843,6 @@ func remapBTreeNode(sourceCore, targetCore Core, hashSize uint16, offsetMap map[
 			counts[i] = int64(binary.BigEndian.Uint64(body[countsOffset+i*8 : countsOffset+i*8+8]))
 		}
 
-		newOffset, err := targetCore.Length()
-		if err != nil {
-			return 0, err
-		}
 		if err := targetCore.SeekTo(newOffset); err != nil {
 			return 0, err
 		}
@@ -2844,7 +2863,6 @@ func remapBTreeNode(sourceCore, targetCore Core, hashSize uint16, offsetMap map[
 			}
 		}
 
-		offsetMap[nodeOffset] = newOffset
 		return newOffset, nil
 	}
 	return 0, ErrUnreachable
@@ -2863,15 +2881,17 @@ func remapSortedMap(sourceCore, targetCore Core, hashSize uint16, offsetMap map[
 		return 0, err
 	}
 
+	newOffset, err := reserveBlock(targetCore, BTreeHeaderLength)
+	if err != nil {
+		return 0, err
+	}
+	offsetMap[slot.Value] = newOffset
+
 	remappedRoot, err := remapSortedMapNode(sourceCore, targetCore, hashSize, offsetMap, header.RootPtr)
 	if err != nil {
 		return 0, err
 	}
 
-	newOffset, err := targetCore.Length()
-	if err != nil {
-		return 0, err
-	}
 	if err := targetCore.SeekTo(newOffset); err != nil {
 		return 0, err
 	}
@@ -2902,6 +2922,9 @@ func remapSortedMapNode(sourceCore, targetCore Core, hashSize uint16, offsetMap 
 	}
 	kind := BTreeNodeKind(kindInt)
 	num := nodeHeader[1]
+	if num > BTreeSlotCount {
+		return 0, ErrInvalidBTreeNode
+	}
 
 	switch kind {
 	case BTreeKindLeaf:
@@ -2909,6 +2932,12 @@ func remapSortedMapNode(sourceCore, targetCore Core, hashSize uint16, offsetMap 
 		if err := sourceCore.Read(body); err != nil {
 			return 0, err
 		}
+		newOffset, err := reserveBlock(targetCore, SortedLeafBlockSize)
+		if err != nil {
+			return 0, err
+		}
+		offsetMap[nodeOffset] = newOffset
+
 		var entries [BTreeSlotCount]Slot
 		for i := 0; i < BTreeSlotCount; i++ {
 			var sb [SlotLength]byte
@@ -2920,10 +2949,6 @@ func remapSortedMapNode(sourceCore, targetCore Core, hashSize uint16, offsetMap 
 			entries[i] = remapped
 		}
 
-		newOffset, err := targetCore.Length()
-		if err != nil {
-			return 0, err
-		}
 		if err := targetCore.SeekTo(newOffset); err != nil {
 			return 0, err
 		}
@@ -2937,13 +2962,18 @@ func remapSortedMapNode(sourceCore, targetCore Core, hashSize uint16, offsetMap 
 			}
 		}
 
-		offsetMap[nodeOffset] = newOffset
 		return newOffset, nil
 	case BTreeKindBranch:
 		body := make([]byte, (SlotLength*2+8)*BTreeSlotCount)
 		if err := sourceCore.Read(body); err != nil {
 			return 0, err
 		}
+		newOffset, err := reserveBlock(targetCore, SortedBranchBlockSize)
+		if err != nil {
+			return 0, err
+		}
+		offsetMap[nodeOffset] = newOffset
+
 		var children [BTreeSlotCount]Slot
 		for i := 0; i < BTreeSlotCount; i++ {
 			var sb [SlotLength]byte
@@ -2981,10 +3011,6 @@ func remapSortedMapNode(sourceCore, targetCore Core, hashSize uint16, offsetMap 
 			counts[i] = int64(binary.BigEndian.Uint64(body[countsOffset+i*8 : countsOffset+i*8+8]))
 		}
 
-		newOffset, err := targetCore.Length()
-		if err != nil {
-			return 0, err
-		}
 		if err := targetCore.SeekTo(newOffset); err != nil {
 			return 0, err
 		}
@@ -3011,7 +3037,6 @@ func remapSortedMapNode(sourceCore, targetCore Core, hashSize uint16, offsetMap 
 			}
 		}
 
-		offsetMap[nodeOffset] = newOffset
 		return newOffset, nil
 	}
 	return 0, ErrUnreachable
@@ -3036,6 +3061,16 @@ func remapHashMapOrSet(sourceCore, targetCore Core, hashSize uint16, offsetMap m
 		return 0, err
 	}
 
+	blockSize := IndexBlockSize
+	if counted {
+		blockSize += 8
+	}
+	newOffset, err := reserveBlock(targetCore, blockSize)
+	if err != nil {
+		return 0, err
+	}
+	offsetMap[slot.Value] = newOffset
+
 	var remappedSlots [SlotCount]Slot
 	for i := 0; i < SlotCount; i++ {
 		var sb [SlotLength]byte
@@ -3048,10 +3083,6 @@ func remapHashMapOrSet(sourceCore, targetCore Core, hashSize uint16, offsetMap m
 		remappedSlots[i] = remapped
 	}
 
-	newOffset, err := targetCore.Length()
-	if err != nil {
-		return 0, err
-	}
 	if err := targetCore.SeekTo(newOffset); err != nil {
 		return 0, err
 	}
@@ -3080,6 +3111,12 @@ func remapKvPair(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int
 	}
 	kvPair := KeyValuePairFromBytes(kvPairBytes, int(hashSize))
 
+	newOffset, err := reserveBlock(targetCore, KeyValuePairLength(int(hashSize)))
+	if err != nil {
+		return 0, err
+	}
+	offsetMap[slot.Value] = newOffset
+
 	remappedKey, err := remapSlot(sourceCore, targetCore, hashSize, offsetMap, kvPair.KeySlot)
 	if err != nil {
 		return 0, err
@@ -3089,10 +3126,6 @@ func remapKvPair(sourceCore, targetCore Core, hashSize uint16, offsetMap map[int
 		return 0, err
 	}
 
-	newOffset, err := targetCore.Length()
-	if err != nil {
-		return 0, err
-	}
 	if err := targetCore.SeekTo(newOffset); err != nil {
 		return 0, err
 	}
