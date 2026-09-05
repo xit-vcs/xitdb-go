@@ -1232,7 +1232,7 @@ func (db *Database) readArrayListSlot(indexPos int64, key int64, shift byte, wri
 	return SlotPointer{}, ErrUnreachable
 }
 
-func (db *Database) readArrayListSlice(header ArrayListHeader, size int64) (ArrayListHeader, error) {
+func (db *Database) readArrayListSlice(header ArrayListHeader, size int64, isTopLevel bool) (ArrayListHeader, error) {
 	if size > header.Size || size < 0 {
 		return ArrayListHeader{}, ErrKeyNotFound
 	}
@@ -1266,6 +1266,28 @@ func (db *Database) readArrayListSlice(header ArrayListHeader, size int64) (Arra
 		slot := SlotFromBytes(slotBytes)
 		shift--
 		indexPos = slot.Value
+	}
+	// the new root may still belong to a past moment. unlike child
+	// nodes, root nodes are written directly, so copy it now.
+	if !isTopLevel && db.TxStart != nil && indexPos < *db.TxStart {
+		var indexBlock [IndexBlockSize]byte
+		if err := db.Core.SeekTo(indexPos); err != nil {
+			return ArrayListHeader{}, err
+		}
+		if err := db.Core.Read(indexBlock[:]); err != nil {
+			return ArrayListHeader{}, err
+		}
+		var err error
+		indexPos, err = db.Core.Length()
+		if err != nil {
+			return ArrayListHeader{}, err
+		}
+		if err := db.Core.SeekTo(indexPos); err != nil {
+			return ArrayListHeader{}, err
+		}
+		if err := db.Core.Write(indexBlock[:]); err != nil {
+			return ArrayListHeader{}, err
+		}
 	}
 	return ArrayListHeader{Ptr: indexPos, Size: size}, nil
 }
@@ -2653,6 +2675,61 @@ func (c *compactor) populateIndex(sourceOffset, targetOffset int64) error {
 	return nil
 }
 
+func (c *compactor) remapArrayListIndex(sourceOffset, size int64, shift byte) (int64, error) {
+	childSize := int64(1) << (shift * BitCount)
+
+	// full blocks can use the normal cache. partial blocks may
+	// be shared by lists with different sizes, so copy them
+	// separately and leave the slots beyond the size empty.
+	if childSize <= math.MaxInt64/SlotCount && size == childSize*SlotCount {
+		slot, err := c.remapSlot(Slot{Value: sourceOffset, Tag: TagIndex})
+		return slot.Value, err
+	}
+
+	targetOffset, err := c.reserveBlock(IndexBlockSize)
+	if err != nil {
+		return 0, err
+	}
+	if err := c.sourceCore.SeekTo(sourceOffset); err != nil {
+		return 0, err
+	}
+	var blockBytes [IndexBlockSize]byte
+	if err := c.sourceCore.Read(blockBytes[:]); err != nil {
+		return 0, err
+	}
+	var remappedBlock [IndexBlockSize]byte
+	remaining := size
+	for i := 0; i < SlotCount && remaining > 0; i++ {
+		var slotBytes [SlotLength]byte
+		copy(slotBytes[:], blockBytes[i*SlotLength:(i+1)*SlotLength])
+		childSlot := SlotFromBytes(slotBytes)
+		count := min(remaining, childSize)
+		remappedSlot := childSlot
+		if shift == 0 {
+			remappedSlot, err = c.remapSlot(childSlot)
+		} else {
+			if childSlot.Tag != TagIndex {
+				return 0, ErrUnexpectedTag
+			}
+			remappedSlot.Value, err = c.remapArrayListIndex(childSlot.Value, count, shift-1)
+		}
+		if err != nil {
+			return 0, err
+		}
+		b := remappedSlot.ToBytes()
+		copy(remappedBlock[i*SlotLength:(i+1)*SlotLength], b[:])
+		remaining -= count
+	}
+
+	if err := c.targetCore.SeekTo(targetOffset); err != nil {
+		return 0, err
+	}
+	if err := c.targetCore.Write(remappedBlock[:]); err != nil {
+		return 0, err
+	}
+	return targetOffset, nil
+}
+
 func (c *compactor) populateArrayList(sourceOffset, targetOffset int64) error {
 	if err := c.sourceCore.SeekTo(sourceOffset); err != nil {
 		return err
@@ -2666,8 +2743,11 @@ func (c *compactor) populateArrayList(sourceOffset, targetOffset int64) error {
 		return err
 	}
 
-	indexSlot := Slot{Value: header.Ptr, Tag: TagIndex}
-	remappedIndex, err := c.remapSlot(indexSlot)
+	var shift byte
+	if header.Size > SlotCount {
+		shift = byte(math.Log(float64(header.Size-1)) / math.Log(float64(SlotCount)))
+	}
+	remappedIndex, err := c.remapArrayListIndex(header.Ptr, header.Size, shift)
 	if err != nil {
 		return err
 	}
@@ -2675,7 +2755,7 @@ func (c *compactor) populateArrayList(sourceOffset, targetOffset int64) error {
 	if err := c.targetCore.SeekTo(targetOffset); err != nil {
 		return err
 	}
-	newHeader := ArrayListHeader{Ptr: remappedIndex.Value, Size: header.Size}
+	newHeader := ArrayListHeader{Ptr: remappedIndex, Size: header.Size}
 	nhb := newHeader.ToBytes()
 	if err := c.targetCore.Write(nhb[:]); err != nil {
 		return err

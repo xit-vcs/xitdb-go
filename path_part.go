@@ -303,7 +303,7 @@ func (p ArrayListSlice) readSlotPointer(db *Database, isTopLevel bool, writeMode
 		return SlotPointer{}, err
 	}
 
-	sliceHeader, err := db.readArrayListSlice(origHeader, p.Size)
+	sliceHeader, err := db.readArrayListSlice(origHeader, p.Size, isTopLevel)
 	if err != nil {
 		return SlotPointer{}, err
 	}
