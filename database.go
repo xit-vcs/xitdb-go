@@ -462,8 +462,8 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 			return nil, ErrInvalidHashSize
 		}
 		db.Header = header
-		if err := db.truncate(); err != nil {
-			return nil, fmt.Errorf("truncate: %w", err)
+		if _, err := db.validateCommittedSize(); err != nil {
+			return nil, fmt.Errorf("validate committed size: %w", err)
 		}
 	}
 
@@ -631,50 +631,59 @@ func (db *Database) Compact(targetCore Core) (*Database, error) {
 	return target, nil
 }
 
-// truncate
+// committed size
 
-func (db *Database) truncate() error {
+func (db *Database) validateCommittedSize() (int64, error) {
 	if db.Header.Tag != TagArrayList {
-		return nil
+		return db.Core.Length()
 	}
 
 	if err := db.Core.SeekTo(int64(DatabaseStart)); err != nil {
-		return err
+		return 0, err
 	}
 	var headerBytes [TopLevelArrayListHeaderLength]byte
 	if err := db.Core.Read(headerBytes[:]); err != nil {
-		return err
+		return 0, err
 	}
 	header, err := TopLevelArrayListHeaderFromBytes(headerBytes[:])
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	minimumSize := int64(DatabaseStart + TopLevelArrayListHeaderLength + IndexBlockSize)
 	committedSize := header.FileSize
 	if committedSize == 0 {
 		if header.Parent.Size != 0 {
-			return ErrInvalidDatabase
+			return 0, ErrInvalidDatabase
 		}
 		committedSize = minimumSize
 	}
 	if committedSize < minimumSize {
-		return ErrInvalidDatabase
+		return 0, ErrInvalidDatabase
 	}
 
 	fileSize, err := db.Core.Length()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if fileSize < committedSize {
-		return ErrTruncatedDatabase
+		return 0, ErrTruncatedDatabase
 	}
-	if fileSize == committedSize {
-		return nil
-	}
+	return committedSize, nil
+}
 
-	// ignore error because the file may be open in read-only mode
-	_ = db.Core.SetLength(committedSize)
+func (db *Database) truncate() error {
+	committedSize, err := db.validateCommittedSize()
+	if err != nil {
+		return err
+	}
+	fileSize, err := db.Core.Length()
+	if err != nil {
+		return err
+	}
+	if fileSize > committedSize {
+		return db.Core.SetLength(committedSize)
+	}
 	return nil
 }
 

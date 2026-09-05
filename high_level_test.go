@@ -1610,10 +1610,8 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		assertEqual(t, "foo", string(fooValue))
 	}
 
-	// the db size remains the same after writing junk data
-	// and then reinitializing the db. this is useful because
-	// there could be data from a transaction that never
-	// completed due to an unclean shutdown.
+	// opening the db leaves trailing data alone, because it may
+	// belong to another writer's unfinished transaction.
 	{
 		coreLen, err := core.Length()
 		if err != nil {
@@ -1622,9 +1620,15 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		if err := core.SeekTo(coreLen); err != nil {
 			t.Fatal(err)
 		}
-		sizeBefore := coreLen
 
-		if err := core.Write([]byte("this is junk data that will be deleted during init")); err != nil {
+		if err := core.Write([]byte("this is trailing data from an unfinished transaction")); err != nil {
+			t.Fatal(err)
+		}
+		if err := core.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		sizeWithTail, err := core.Length()
+		if err != nil {
 			t.Fatal(err)
 		}
 
@@ -1651,7 +1655,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 		if err != nil {
 			t.Fatal(err)
 		}
-		assertEqual(t, sizeBefore, sizeAfter)
+		assertEqual(t, sizeWithTail, sizeAfter)
 	}
 
 	// cloning

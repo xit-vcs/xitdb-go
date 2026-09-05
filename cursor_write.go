@@ -97,13 +97,27 @@ func (w *CursorWriter) Write(p []byte) (int, error) {
 	if w.size < w.relativePosition {
 		return 0, ErrEndOfStream
 	}
+	newPosition := w.relativePosition + int64(len(p))
+
+	// another allocation may now follow this byte array.
+	// extending it would overwrite that allocation.
+	if newPosition > w.size {
+		end, err := w.parent.DB.Core.Length()
+		if err != nil {
+			return 0, err
+		}
+		if end != w.startPosition+w.size {
+			return 0, ErrUnexpectedWriterPosition
+		}
+	}
+
 	if err := w.parent.DB.Core.SeekTo(w.startPosition + w.relativePosition); err != nil {
 		return 0, err
 	}
 	if err := w.parent.DB.Core.Write(p); err != nil {
 		return 0, err
 	}
-	w.relativePosition += int64(len(p))
+	w.relativePosition = newPosition
 	if w.relativePosition > w.size {
 		w.size = w.relativePosition
 	}
