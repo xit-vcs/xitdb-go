@@ -7,6 +7,11 @@ type WriteCursor struct {
 func (c *WriteCursor) WritePath(path []PathPart) (*WriteCursor, error) {
 	slotPtr, err := c.DB.readSlotPointer(ReadWrite, path, 0, c.SlotPtr)
 	if err != nil {
+		// only truncate when the error escapes the outer write.
+		// a nested callback's caller may still commit its work.
+		if c.DB.TxStart == nil {
+			_ = c.DB.truncate()
+		}
 		return nil, err
 	}
 	if c.DB.TxStart == nil {

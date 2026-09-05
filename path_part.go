@@ -1456,8 +1456,6 @@ func (p Context) readSlotPointer(db *Database, isTopLevel bool, writeMode WriteM
 	nextCursor := &WriteCursor{ReadCursor: &ReadCursor{SlotPtr: slotPtr, DB: db}}
 	err := p.Function(nextCursor)
 	if err != nil {
-		// since an error occurred, there may be inaccessible junk at the end of the db
-		db.truncate()
 		return SlotPointer{}, err
 	}
 	return nextCursor.SlotPtr, nil
