@@ -1,6 +1,9 @@
 package xitdb
 
-import "os"
+import (
+	"io"
+	"os"
+)
 
 type CoreBufferedFile struct {
 	file       *os.File
@@ -37,7 +40,7 @@ func (c *CoreBufferedFile) Read(p []byte) error {
 		if _, err := c.file.Seek(c.filePos, 0); err != nil {
 			return err
 		}
-		if _, err := c.file.Read(p[:sizeBeforeMem]); err != nil {
+		if _, err := io.ReadFull(c.file, p[:sizeBeforeMem]); err != nil {
 			return err
 		}
 		pos += sizeBeforeMem
@@ -67,7 +70,7 @@ func (c *CoreBufferedFile) Read(p []byte) error {
 		if _, err := c.file.Seek(c.filePos, 0); err != nil {
 			return err
 		}
-		if _, err := c.file.Read(p[pos : pos+sizeAfterMem]); err != nil {
+		if _, err := io.ReadFull(c.file, p[pos:pos+sizeAfterMem]); err != nil {
 			return err
 		}
 		c.filePos += int64(sizeAfterMem)

@@ -1,6 +1,9 @@
 package xitdb
 
-import "os"
+import (
+	"io"
+	"os"
+)
 
 type CoreFile struct {
 	File *os.File
@@ -11,7 +14,7 @@ func NewCoreFile(f *os.File) *CoreFile {
 }
 
 func (c *CoreFile) Read(p []byte) error {
-	_, err := c.File.Read(p)
+	_, err := io.ReadFull(c.File, p)
 	return err
 }
 
