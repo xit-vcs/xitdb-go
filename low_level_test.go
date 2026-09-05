@@ -2527,9 +2527,11 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 					t.Fatal(err)
 				}
 				if bytes.Equal(kvPair.Hash, fooKey) {
-					if err := kvPair.KeyCursor.Write(NewString("bar")); err != nil {
+					value, err := kvPair.ValueCursor.ReadUint()
+					if err != nil {
 						t.Fatal(err)
 					}
+					assertEqual(t, uint64(42), value)
 				}
 				i++
 			}

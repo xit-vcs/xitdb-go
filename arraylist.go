@@ -102,11 +102,3 @@ func (a *WriteArrayList) Slice(size int64) error {
 	_, err := a.writeCursor.WritePath([]PathPart{ArrayListSlice{Size: size}})
 	return err
 }
-
-func (a *WriteArrayList) All() iter.Seq2[*WriteCursor, error] {
-	return a.writeCursor.All()
-}
-
-func (a *WriteArrayList) AllFrom(index int64) iter.Seq2[*WriteCursor, error] {
-	return writeIter(a.ReadArrayList.AllFrom(index))
-}

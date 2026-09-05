@@ -528,6 +528,8 @@ func (it *CursorIterator) nextInternal(nodeOffset int64) (*ReadCursor, error) {
 
 // All returns an iterator for range-over-func (Go 1.23+)
 
+// iterators don't copy shared nodes, so their cursors must
+// be read-only. this also prevents changes to sorted keys.
 func (c *ReadCursor) All() iter.Seq2[*ReadCursor, error] {
 	return func(yield func(*ReadCursor, error) bool) {
 		it, err := newCursorIterator(c)

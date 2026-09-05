@@ -3219,7 +3219,7 @@ func testSortedMap(t *testing.T, core Core, hasher Hasher) {
 	}
 
 	// the first key yielded by a ranged iterator
-	firstKey := func(seq iter.Seq2[*WriteCursor, error]) (string, error) {
+	firstKey := func(seq iter.Seq2[*ReadCursor, error]) (string, error) {
 		for c, err := range seq {
 			if err != nil {
 				return "", err
@@ -3816,8 +3816,8 @@ func testAllFrom(t *testing.T, core Core, hasher Hasher) {
 			}
 		}
 
-		// the write-side structs expose AllFrom too, yielding write cursors
-		checkWrite := func(seq iter.Seq2[*WriteCursor, error], wantFirst, wantN int) error {
+		// the write-side structs expose AllFrom too, yielding read-only cursors
+		checkWrite := func(seq iter.Seq2[*ReadCursor, error], wantFirst, wantN int) error {
 			first, n := -1, 0
 			for c, err := range seq {
 				if err != nil {

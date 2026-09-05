@@ -238,7 +238,3 @@ func (m *WriteHashMap) RemoveByHash(hash []byte) (bool, error) {
 	}
 	return true, nil
 }
-
-func (m *WriteHashMap) All() iter.Seq2[*WriteCursor, error] {
-	return m.writeCursor.All()
-}

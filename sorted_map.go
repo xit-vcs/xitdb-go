@@ -137,18 +137,6 @@ func NewWriteSortedMap(cursor *WriteCursor) (*WriteSortedMap, error) {
 	return &WriteSortedMap{ReadSortedMap: rm, writeCursor: wc}, nil
 }
 
-func (m *WriteSortedMap) All() iter.Seq2[*WriteCursor, error] {
-	return m.writeCursor.All()
-}
-
-func (m *WriteSortedMap) AllFrom(startKey []byte) iter.Seq2[*WriteCursor, error] {
-	return writeIter(m.ReadSortedMap.AllFrom(startKey))
-}
-
-func (m *WriteSortedMap) AllFromIndex(startIndex int64) iter.Seq2[*WriteCursor, error] {
-	return writeIter(m.ReadSortedMap.AllFromIndex(startIndex))
-}
-
 // String key methods
 
 func (m *WriteSortedMap) Put(key string, data WriteableData) error {

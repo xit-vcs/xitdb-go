@@ -115,11 +115,3 @@ func (a *WriteLinkedArrayList) Remove(index int64) error {
 	_, err := a.writeCursor.WritePath([]PathPart{LinkedArrayListRemovePart{Index: index}})
 	return err
 }
-
-func (a *WriteLinkedArrayList) All() iter.Seq2[*WriteCursor, error] {
-	return a.writeCursor.All()
-}
-
-func (a *WriteLinkedArrayList) AllFrom(index int64) iter.Seq2[*WriteCursor, error] {
-	return writeIter(a.ReadLinkedArrayList.AllFrom(index))
-}

@@ -132,7 +132,3 @@ func (s *WriteHashSet) RemoveByHash(hash []byte) (bool, error) {
 	}
 	return true, nil
 }
-
-func (s *WriteHashSet) All() iter.Seq2[*WriteCursor, error] {
-	return s.writeCursor.All()
-}
