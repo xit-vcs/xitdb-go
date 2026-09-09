@@ -13,18 +13,34 @@ func newWriteCursor(slotPtr SlotPointer, db *Database) *WriteCursor {
 	return cursor
 }
 
-func (c *WriteCursor) checkWrite() error {
+// require the active transaction and a writable slot
+func (c *WriteCursor) checkWritable() error {
 	if c.transaction != nil && c.transaction != c.DB.transaction {
 		return ErrExpiredTransaction
 	}
 	if c.SlotPtr.Position != nil && c.DB.Header.Tag == TagArrayList && c.transaction == nil {
 		return ErrExpectedTxStart
 	}
+	return c.DB.checkFrozenSlot(c.SlotPtr)
+}
+
+// reload after freezing because copy-on-write may change where the slot points
+func (c *WriteCursor) reloadSlot() error {
+	if c.transaction != nil && c.transaction.frozenAt != nil && c.SlotPtr.Position != nil {
+		if err := c.DB.Core.SeekTo(*c.SlotPtr.Position); err != nil {
+			return err
+		}
+		var buf [SlotLength]byte
+		if err := c.DB.Core.Read(buf[:]); err != nil {
+			return err
+		}
+		c.SlotPtr = c.SlotPtr.WithSlot(SlotFromBytes(buf))
+	}
 	return nil
 }
 
 func (c *WriteCursor) WritePath(path []PathPart) (*WriteCursor, error) {
-	if err := c.checkWrite(); err != nil {
+	if err := c.checkWritable(); err != nil {
 		return nil, err
 	}
 	initializesHistory := false
@@ -40,7 +56,11 @@ func (c *WriteCursor) WritePath(path []PathPart) (*WriteCursor, error) {
 		c.DB.transaction = &transaction{}
 		defer func() { c.DB.transaction = nil }()
 	}
-	slotPtr, err := c.DB.readSlotPointer(ReadWrite, path, 0, c.SlotPtr)
+	err := c.reloadSlot()
+	var slotPtr SlotPointer
+	if err == nil {
+		slotPtr, err = c.DB.readSlotPointer(ReadWrite, path, 0, c.SlotPtr)
+	}
 	if err != nil {
 		// only truncate when the error escapes the outer write.
 		// a nested callback's caller may still commit its work.
@@ -54,7 +74,14 @@ func (c *WriteCursor) WritePath(path []PathPart) (*WriteCursor, error) {
 			return nil, err
 		}
 	}
-	return newWriteCursor(slotPtr, c.DB), nil
+	if err := c.reloadSlot(); err != nil {
+		return nil, err
+	}
+	cursor := newWriteCursor(slotPtr, c.DB)
+	if err := cursor.reloadSlot(); err != nil {
+		return nil, err
+	}
+	return cursor, nil
 }
 
 func (c *WriteCursor) Write(data WriteableData) error {
@@ -67,7 +94,7 @@ func (c *WriteCursor) Write(data WriteableData) error {
 }
 
 func (c *WriteCursor) WriteIfEmpty(data WriteableData) error {
-	if err := c.checkWrite(); err != nil {
+	if err := c.checkWritable(); err != nil {
 		return err
 	}
 	if c.SlotPtr.Slot.Empty() {
@@ -108,7 +135,7 @@ type CursorWriter struct {
 }
 
 func (c *WriteCursor) Writer() (*CursorWriter, error) {
-	if err := c.checkWrite(); err != nil {
+	if err := c.checkWritable(); err != nil {
 		return nil, err
 	}
 	ptrPos, err := c.DB.Core.Length()
@@ -135,7 +162,7 @@ func (c *WriteCursor) Writer() (*CursorWriter, error) {
 }
 
 func (w *CursorWriter) Write(p []byte) (int, error) {
-	if err := w.parent.checkWrite(); err != nil {
+	if err := w.checkWritable(); err != nil {
 		return 0, err
 	}
 	if w.size < w.relativePosition {
@@ -169,7 +196,7 @@ func (w *CursorWriter) Write(p []byte) (int, error) {
 }
 
 func (w *CursorWriter) Finish() error {
-	if err := w.parent.checkWrite(); err != nil {
+	if err := w.checkWritable(); err != nil {
 		return err
 	}
 	if w.FormatTag != nil {
@@ -209,6 +236,18 @@ func (w *CursorWriter) Finish() error {
 	}
 
 	w.parent.SlotPtr = w.parent.SlotPtr.WithSlot(w.slot)
+	return nil
+}
+
+// validate the parent cursor and reject writes to frozen bytes
+func (w *CursorWriter) checkWritable() error {
+	if err := w.parent.checkWritable(); err != nil {
+		return err
+	}
+	active := w.parent.DB.transaction
+	if active != nil && active.frozenAt != nil && w.slot.Value < *active.frozenAt {
+		return ErrFrozenBytes
+	}
 	return nil
 }
 

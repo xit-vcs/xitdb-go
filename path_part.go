@@ -162,6 +162,13 @@ func (p ArrayListGet) readSlotPointer(db *Database, isTopLevel bool, writeMode W
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
+	if writeMode == ReadWrite {
+		var err error
+		slotPtr, err = db.copyCollectionIfFrozen(slotPtr, isTopLevel, ArrayListInit{})
+		if err != nil {
+			return SlotPointer{}, err
+		}
+	}
 	nextArrayListStart := slotPtr.Slot.Value
 	index := p.Index
 
@@ -218,6 +225,10 @@ func (p ArrayListAppend) readSlotPointer(db *Database, isTopLevel bool, writeMod
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
+	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, isTopLevel, ArrayListInit{})
+	if err != nil {
+		return SlotPointer{}, err
+	}
 	nextArrayListStart := slotPtr.Slot.Value
 
 	if err := db.Core.SeekTo(nextArrayListStart); err != nil {
@@ -235,6 +246,19 @@ func (p ArrayListAppend) readSlotPointer(db *Database, isTopLevel bool, writeMod
 	appendResult, err := db.readArrayListSlotAppend(origHeader, writeMode, isTopLevel)
 	if err != nil {
 		return SlotPointer{}, err
+	}
+	// update nested headers before callbacks can freeze them
+	if !isTopLevel {
+		if err := db.Core.SeekTo(nextArrayListStart); err != nil {
+			return SlotPointer{}, err
+		}
+		b := appendResult.Header.ToBytes()
+		if err := db.Core.Write(b[:]); err != nil {
+			return SlotPointer{}, err
+		}
+	}
+	if isTopLevel && db.transaction != nil {
+		db.transaction.rootPosition = appendResult.SlotPtr.Position
 	}
 	finalSlotPtr, err := db.readSlotPointer(writeMode, path, pathI+1, appendResult.SlotPtr)
 	if err != nil {
@@ -263,14 +287,6 @@ func (p ArrayListAppend) readSlotPointer(db *Database, isTopLevel bool, writeMod
 		if err := db.Core.Write(b[:]); err != nil {
 			return SlotPointer{}, err
 		}
-	} else {
-		if err := db.Core.SeekTo(nextArrayListStart); err != nil {
-			return SlotPointer{}, err
-		}
-		b := appendResult.Header.ToBytes()
-		if err := db.Core.Write(b[:]); err != nil {
-			return SlotPointer{}, err
-		}
 	}
 
 	return finalSlotPtr, nil
@@ -290,6 +306,10 @@ func (p ArrayListSlice) readSlotPointer(db *Database, isTopLevel bool, writeMode
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
+	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, isTopLevel, ArrayListInit{})
+	if err != nil {
+		return SlotPointer{}, err
+	}
 	nextArrayListStart := slotPtr.Slot.Value
 	if err := db.Core.SeekTo(nextArrayListStart); err != nil {
 		return SlotPointer{}, err
@@ -307,25 +327,33 @@ func (p ArrayListSlice) readSlotPointer(db *Database, isTopLevel bool, writeMode
 	if err != nil {
 		return SlotPointer{}, err
 	}
+	// update nested headers before callbacks can freeze them
+	if !isTopLevel {
+		if err := db.Core.SeekTo(nextArrayListStart); err != nil {
+			return SlotPointer{}, err
+		}
+		b := sliceHeader.ToBytes()
+		if err := db.Core.Write(b[:]); err != nil {
+			return SlotPointer{}, err
+		}
+	}
 	finalSlotPtr, err := db.readSlotPointer(writeMode, path, pathI+1, slotPtr)
 	if err != nil {
 		return SlotPointer{}, err
 	}
 
-	// if top level, updating the header below commits the transaction,
-	// so make everything written so far durable first
+	// commit the top-level header after the callback's writes are durable
 	if isTopLevel {
 		if err := db.Core.Sync(); err != nil {
 			return SlotPointer{}, err
 		}
-	}
-
-	if err := db.Core.SeekTo(nextArrayListStart); err != nil {
-		return SlotPointer{}, err
-	}
-	b := sliceHeader.ToBytes()
-	if err := db.Core.Write(b[:]); err != nil {
-		return SlotPointer{}, err
+		if err := db.Core.SeekTo(nextArrayListStart); err != nil {
+			return SlotPointer{}, err
+		}
+		b := sliceHeader.ToBytes()
+		if err := db.Core.Write(b[:]); err != nil {
+			return SlotPointer{}, err
+		}
 	}
 
 	return finalSlotPtr, nil
@@ -436,6 +464,13 @@ func (p LinkedArrayListGet) readSlotPointer(db *Database, isTopLevel bool, write
 	}
 
 	index := p.Index
+	if writeMode == ReadWrite {
+		var err error
+		slotPtr, err = db.copyCollectionIfFrozen(slotPtr, isTopLevel, LinkedArrayListInit{})
+		if err != nil {
+			return SlotPointer{}, err
+		}
+	}
 	headerPtr := slotPtr.Slot.Value
 	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
@@ -472,11 +507,7 @@ func (p LinkedArrayListGet) readSlotPointer(db *Database, isTopLevel bool, write
 		return SlotPointer{}, err
 	}
 	valuePosition := writeSlot.ValuePosition
-	finalSlotPtr, err := db.readSlotPointer(writeMode, path, pathI+1, SlotPointer{Position: &valuePosition, Slot: writeSlot.Slot})
-	if err != nil {
-		return SlotPointer{}, err
-	}
-	// the header only needs rewriting if the root actually moved
+	// update the header before callbacks can freeze it
 	if writeSlot.NodePtr != header.RootPtr {
 		if err := db.Core.SeekTo(headerPtr); err != nil {
 			return SlotPointer{}, err
@@ -487,7 +518,7 @@ func (p LinkedArrayListGet) readSlotPointer(db *Database, isTopLevel bool, write
 			return SlotPointer{}, err
 		}
 	}
-	return finalSlotPtr, nil
+	return db.readSlotPointer(writeMode, path, pathI+1, SlotPointer{Position: &valuePosition, Slot: writeSlot.Slot})
 }
 
 // LinkedArrayListAppend
@@ -502,6 +533,10 @@ func (p LinkedArrayListAppend) readSlotPointer(db *Database, isTopLevel bool, wr
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
+	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, isTopLevel, LinkedArrayListInit{})
+	if err != nil {
+		return SlotPointer{}, err
+	}
 	headerPtr := slotPtr.Slot.Value
 	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
@@ -555,6 +590,10 @@ func (p LinkedArrayListSlicePart) readSlotPointer(db *Database, isTopLevel bool,
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
+	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, isTopLevel, LinkedArrayListInit{})
+	if err != nil {
+		return SlotPointer{}, err
+	}
 	headerPtr := slotPtr.Slot.Value
 	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
@@ -615,6 +654,10 @@ func (p LinkedArrayListConcatPart) readSlotPointer(db *Database, isTopLevel bool
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
+	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, isTopLevel, LinkedArrayListInit{})
+	if err != nil {
+		return SlotPointer{}, err
+	}
 	headerPtr := slotPtr.Slot.Value
 	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
@@ -681,6 +724,10 @@ func (p LinkedArrayListInsertPart) readSlotPointer(db *Database, isTopLevel bool
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
+	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, isTopLevel, LinkedArrayListInit{})
+	if err != nil {
+		return SlotPointer{}, err
+	}
 	headerPtr := slotPtr.Slot.Value
 	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
@@ -743,6 +790,10 @@ func (p LinkedArrayListRemovePart) readSlotPointer(db *Database, isTopLevel bool
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
+	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, isTopLevel, LinkedArrayListInit{})
+	if err != nil {
+		return SlotPointer{}, err
+	}
 	headerPtr := slotPtr.Slot.Value
 	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
@@ -983,6 +1034,13 @@ func (p HashMapGetPart) readSlotPointer(db *Database, isTopLevel bool, writeMode
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
+	if writeMode == ReadWrite {
+		var err error
+		slotPtr, err = db.copyCollectionIfFrozen(slotPtr, isTopLevel, HashMapInitPart{Counted: counted, Set: slotPtr.Slot.Tag == TagHashSet || slotPtr.Slot.Tag == TagCountedHashSet})
+		if err != nil {
+			return SlotPointer{}, err
+		}
+	}
 	var indexPos int64
 	if counted {
 		indexPos = slotPtr.Slot.Value + 8
@@ -1041,6 +1099,10 @@ func (p HashMapRemovePart) readSlotPointer(db *Database, isTopLevel bool, writeM
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
+	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, isTopLevel, HashMapInitPart{Counted: counted, Set: slotPtr.Slot.Tag == TagHashSet || slotPtr.Slot.Tag == TagCountedHashSet})
+	if err != nil {
+		return SlotPointer{}, err
+	}
 	var indexPos int64
 	if counted {
 		indexPos = slotPtr.Slot.Value + 8
@@ -1197,6 +1259,13 @@ func (p SortedMapGetPart) readSlotPointer(db *Database, isTopLevel bool, writeMo
 	}
 
 	key := p.Target.getKey()
+	if writeMode == ReadWrite {
+		var err error
+		slotPtr, err = db.copyCollectionIfFrozen(slotPtr, isTopLevel, SortedMapInitPart{Set: slotPtr.Slot.Tag == TagSortedSet})
+		if err != nil {
+			return SlotPointer{}, err
+		}
+	}
 	headerPtr := slotPtr.Slot.Value
 	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err
@@ -1330,6 +1399,10 @@ func (p SortedMapRemovePart) readSlotPointer(db *Database, isTopLevel bool, writ
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
+	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, isTopLevel, SortedMapInitPart{Set: slotPtr.Slot.Tag == TagSortedSet})
+	if err != nil {
+		return SlotPointer{}, err
+	}
 	headerPtr := slotPtr.Slot.Value
 	if err := db.Core.SeekTo(headerPtr); err != nil {
 		return SlotPointer{}, err

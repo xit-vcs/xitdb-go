@@ -414,8 +414,8 @@ type ContextFunction func(cursor *WriteCursor) error
 // Database
 
 type transaction struct {
-	// keep transaction pointers distinct
-	_ byte
+	rootPosition *int64
+	frozenAt     *int64
 }
 
 type Database struct {
@@ -501,15 +501,17 @@ func (db *Database) RootCursor() *WriteCursor {
 }
 
 func (db *Database) Freeze() error {
-	if db.TxStart != nil {
-		length, err := db.Core.Length()
-		if err != nil {
-			return err
-		}
-		db.TxStart = &length
-		return nil
+	active := db.transaction
+	if active == nil || db.TxStart == nil {
+		return ErrExpectedTxStart
 	}
-	return ErrExpectedTxStart
+	length, err := db.Core.Length()
+	if err != nil {
+		return err
+	}
+	db.TxStart = &length
+	active.frozenAt = db.TxStart
+	return nil
 }
 
 func (db *Database) Compact(targetCore Core) (*Database, error) {
@@ -713,6 +715,24 @@ func checkLong(n int64) (int64, error) {
 	return n, nil
 }
 
+// reject writes into frozen data; the current transaction's root slot remains writable
+func (db *Database) checkFrozenSlot(slotPtr SlotPointer) error {
+	active := db.transaction
+	if active != nil && active.frozenAt != nil && slotPtr.Position != nil &&
+		*slotPtr.Position < *active.frozenAt && (active.rootPosition == nil || *slotPtr.Position != *active.rootPosition) {
+		return ErrFrozenSlot
+	}
+	return nil
+}
+
+// copy frozen collection storage before mutation to preserve existing readers
+func (db *Database) copyCollectionIfFrozen(slotPtr SlotPointer, isTopLevel bool, init PathPart) (SlotPointer, error) {
+	if !isTopLevel && db.transaction != nil && db.transaction.frozenAt != nil && slotPtr.Slot.Value < *db.transaction.frozenAt {
+		return init.readSlotPointer(db, false, ReadWrite, []PathPart{init}, 0, slotPtr)
+	}
+	return slotPtr, nil
+}
+
 // readSlotPointer - the central path-traversal method
 
 func (db *Database) readSlotPointer(writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
@@ -721,6 +741,11 @@ func (db *Database) readSlotPointer(writeMode WriteMode, path []PathPart, pathI 
 			return SlotPointer{}, ErrKeyNotFound
 		}
 		return slotPtr, nil
+	}
+	if writeMode == ReadWrite {
+		if err := db.checkFrozenSlot(slotPtr); err != nil {
+			return SlotPointer{}, err
+		}
 	}
 	part := path[pathI]
 

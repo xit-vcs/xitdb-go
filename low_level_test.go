@@ -10,6 +10,93 @@ import (
 	"testing"
 )
 
+func TestFrozenWriters(t *testing.T) {
+	check := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	readValue := func(cursor *ReadCursor, key string) int64 {
+		t.Helper()
+		m, err := NewReadHashMap(cursor)
+		check(err)
+		valueCursor, err := m.GetCursor(key)
+		check(err)
+		value, err := valueCursor.ReadInt()
+		check(err)
+		return value
+	}
+	db, err := NewDatabase(NewCoreMemory(), sha1Hasher())
+	check(err)
+	history, err := NewWriteArrayList(db.RootCursor())
+	check(err)
+	result, err := db.RootCursor().WritePath([]PathPart{
+		ArrayListAppend{}, HashMapInitPart{}, Context{Function: func(cursor *WriteCursor) error {
+			m, err := NewWriteHashMap(cursor)
+			check(err)
+			check(m.Put("v", NewInt(1)))
+			childCursor, err := m.PutCursor("child")
+			check(err)
+			child, err := NewWriteHashMap(childCursor)
+			check(err)
+			check(child.Put("v", NewInt(2)))
+			equivalent, err := m.writeCursor.WritePath(nil)
+			check(err)
+			frozen, err := NewReadHashMap(&ReadCursor{SlotPtr: m.Cursor.SlotPtr, DB: db})
+			check(err)
+			check(db.Freeze())
+			assertEqual(t, error(ErrFrozenSlot), child.Put("v", NewInt(999)))
+			_, err = equivalent.WritePath([]PathPart{
+				HashMapGetPart{Target: HashMapGetValue{Hash: db.digest([]byte("v"))}},
+				WriteData{Data: NewInt(999)},
+			})
+			check(err)
+			check(m.Put("v", NewInt(3)))
+			childCursor, err = m.PutCursor("child")
+			check(err)
+			child, err = NewWriteHashMap(childCursor)
+			check(err)
+			check(child.Put("v", NewInt(4)))
+			assertEqual(t, int64(1), readValue(frozen.Cursor, "v"))
+			frozenChild, err := frozen.GetCursor("child")
+			check(err)
+			assertEqual(t, int64(2), readValue(frozenChild, "v"))
+			assertEqual(t, int64(3), readValue(m.Cursor, "v"))
+			return nil
+		}},
+	})
+	check(err)
+	assertEqual(t, int64(3), readValue(result.ReadCursor, "v"))
+	slot, err := history.GetSlot(0)
+	check(err)
+	assertEqual(t, slot, result.Slot())
+	check(history.AppendContext(nil, func(cursor *WriteCursor) error {
+		writer, err := cursor.Writer()
+		check(err)
+		_, err = writer.Write(make([]byte, 16))
+		check(err)
+		check(writer.Finish())
+		frozen := &ReadCursor{SlotPtr: cursor.SlotPtr, DB: db}
+		check(db.Freeze())
+		writer.SeekTo(0)
+		_, err = writer.Write([]byte{99})
+		assertEqual(t, error(ErrFrozenBytes), err)
+		assertEqual(t, error(ErrFrozenBytes), writer.Finish())
+		next, err := cursor.Writer()
+		check(err)
+		_, err = next.Write(make([]byte, 16))
+		check(err)
+		check(next.Finish())
+		value, err := frozen.ReadBytes(1024)
+		check(err)
+		if !bytes.Equal(make([]byte, 16), value) {
+			t.Fatal("frozen bytes changed")
+		}
+		return nil
+	}))
+}
+
 func TestExpiredWriters(t *testing.T) {
 	check := func(err error) {
 		t.Helper()
