@@ -380,19 +380,19 @@ func hasherFromHeader(header xitdb.Header) (xitdb.Hasher, error) {
 	switch id {
 	case [4]byte{'s', 'h', 'a', '1'}:
 		return xitdb.Hasher{
-			Hash: sha1.New(),
+			Hash: sha1.New,
 			ID:   header.HashID,
 		}, nil
 	case [4]byte{'s', 'h', 'a', '2'}:
 		switch header.HashSize {
 		case 32:
 			return xitdb.Hasher{
-				Hash: sha256.New(),
+				Hash: sha256.New,
 				ID:   header.HashID,
 			}, nil
 		case 64:
 			return xitdb.Hasher{
-				Hash: sha512.New(),
+				Hash: sha512.New,
 				ID:   header.HashID,
 			}, nil
 		default:
@@ -401,7 +401,7 @@ func hasherFromHeader(header xitdb.Header) (xitdb.Hasher, error) {
 	default:
 		// Fall back to SHA-1 for unknown/zero hash IDs
 		return xitdb.Hasher{
-			Hash: sha1.New(),
+			Hash: sha1.New,
 			ID:   header.HashID,
 		}, nil
 	}

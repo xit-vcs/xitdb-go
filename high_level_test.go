@@ -13,13 +13,13 @@ import (
 
 func sha1Hasher() Hasher {
 	return Hasher{
-		Hash: sha1.New(),
+		Hash: sha1.New,
 	}
 }
 
 func sha1HasherWithID() Hasher {
 	return Hasher{
-		Hash: sha1.New(),
+		Hash: sha1.New,
 		ID:   BytesToID([4]byte{'s', 'h', 'a', '1'}),
 	}
 }

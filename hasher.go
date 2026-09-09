@@ -6,7 +6,8 @@ import (
 )
 
 type Hasher struct {
-	Hash hash.Hash
+	// returns a new, independent hash for each call
+	Hash func() hash.Hash
 	ID   uint32
 }
 

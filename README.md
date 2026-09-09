@@ -44,7 +44,7 @@ if err != nil {
 // init the db
 core := xitdb.NewCoreBufferedFile(f)
 defer core.Close()
-hasher := xitdb.Hasher{Hash: sha1.New()}
+hasher := xitdb.Hasher{Hash: sha1.New}
 db, err := xitdb.NewDatabase(core, hasher)
 if err != nil {
     log.Fatal(err)
@@ -929,7 +929,7 @@ The iteration of the `HashMap` looks the same with `HashSet`, `CountedHashMap`, 
 
 The hashing data structures will create the hash for you when you call methods like `Put` or `GetCursor`. If you want to do the hashing yourself, there are methods like `PutByHash` and `GetCursorByHash` that take a `[]byte` as the hash.
 
-When initializing a database, you tell xitdb how to hash with the `Hasher`. If you're using SHA-1, it will look like this:
+When initializing a database, you tell xitdb how to hash with the `Hasher`. Its `Hash` field takes a `func() hash.Hash` that returns a new, independent hash each time, so hash operations do not share mutable state. If you're using SHA-1, pass `sha1.New` as the factory:
 
 ```go
 f, err := os.OpenFile("main.db", os.O_RDWR|os.O_CREATE, 0644)
@@ -939,7 +939,7 @@ if err != nil {
 
 core := xitdb.NewCoreFile(f)
 defer core.Close()
-hasher := xitdb.Hasher{Hash: sha1.New()}
+hasher := xitdb.Hasher{Hash: sha1.New}
 db, err := xitdb.NewDatabase(core, hasher)
 if err != nil {
     log.Fatal(err)
@@ -963,7 +963,7 @@ The hash size alone does not disambiguate hashing algorithms, though. In additio
 
 ```go
 hasher := xitdb.Hasher{
-    Hash: sha1.New(),
+    Hash: sha1.New,
     ID:   xitdb.BytesToID([4]byte{'s', 'h', 'a', '1'}),
 }
 ```
@@ -996,19 +996,19 @@ var hasher xitdb.Hasher
 switch xitdb.IDToBytes(header.HashID) {
 case [4]byte{'s', 'h', 'a', '1'}:
     hasher = xitdb.Hasher{
-        Hash: sha1.New(),
+        Hash: sha1.New,
         ID:   header.HashID,
     }
 case [4]byte{'s', 'h', 'a', '2'}:
     switch header.HashSize {
     case 32:
         hasher = xitdb.Hasher{
-            Hash: sha256.New(),
+            Hash: sha256.New,
             ID:   header.HashID,
         }
     case 64:
         hasher = xitdb.Hasher{
-            Hash: sha512.New(),
+            Hash: sha512.New,
             ID:   header.HashID,
         }
     default:

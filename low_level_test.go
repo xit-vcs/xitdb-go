@@ -696,7 +696,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 	// save hash id in header
 	{
 		hasherWithHashID := Hasher{
-			Hash: sha1.New(),
+			Hash: sha1.New,
 			ID:   BytesToID([4]byte{'s', 'h', 'a', '1'}),
 		}
 
@@ -724,13 +724,13 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		switch IDToBytes(header.HashID) {
 		case [4]byte{'s', 'h', 'a', '1'}:
 			determinedHasher = Hasher{
-				Hash: sha1.New(),
+				Hash: sha1.New,
 				ID:   header.HashID,
 			}
 		default:
 			t.Fatal("Invalid hash algorithm")
 		}
-		assertEqual(t, 20, determinedHasher.Hash.Size())
+		assertEqual(t, 20, determinedHasher.Hash().Size())
 	}
 
 	// array_list of hash_maps

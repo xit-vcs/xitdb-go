@@ -415,15 +415,15 @@ type ContextFunction func(cursor *WriteCursor) error
 
 type Database struct {
 	Core    Core
-	hash    hash.Hash
+	newHash func() hash.Hash
 	Header  Header
 	TxStart *int64
 }
 
 func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 	db := &Database{
-		Core: core,
-		hash: hasher.Hash,
+		Core:    core,
+		newHash: hasher.Hash,
 	}
 
 	if err := core.SeekTo(0); err != nil {
@@ -435,7 +435,7 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 	}
 
 	if length == 0 {
-		digestLen := uint16(db.hash.Size())
+		digestLen := uint16(db.newHash().Size())
 		db.Header = Header{
 			HashID:      hasher.ID,
 			HashSize:    digestLen,
@@ -457,7 +457,7 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 		if err := header.Validate(); err != nil {
 			return nil, fmt.Errorf("validate header: %w", err)
 		}
-		digestLen := uint16(db.hash.Size())
+		digestLen := uint16(db.newHash().Size())
 		if header.HashSize != digestLen {
 			return nil, ErrInvalidHashSize
 		}
@@ -472,9 +472,9 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 }
 
 func (db *Database) digest(data []byte) []byte {
-	db.hash.Reset()
-	db.hash.Write(data)
-	return db.hash.Sum(nil)
+	digest := db.newHash()
+	digest.Write(data)
+	return digest.Sum(nil)
 }
 
 func (db *Database) RootCursor() *WriteCursor {
@@ -508,7 +508,7 @@ func (db *Database) Freeze() error {
 
 func (db *Database) Compact(targetCore Core) (*Database, error) {
 	offsetMap := make(map[int64]int64)
-	hasher := Hasher{Hash: db.hash, ID: db.Header.HashID}
+	hasher := Hasher{Hash: db.newHash, ID: db.Header.HashID}
 	target, err := NewDatabase(targetCore, hasher)
 	if err != nil {
 		return nil, fmt.Errorf("init target: %w", err)
