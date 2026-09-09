@@ -60,19 +60,23 @@ func (c *WriteCursor) WritePath(path []PathPart) (*WriteCursor, error) {
 		c.DB.transaction = &transaction{}
 		defer func() { c.DB.transaction = nil }()
 	}
+	writeFailed := true
+	defer func() {
+		// only truncate when an error or panic escapes the outer write.
+		// a nested callback's caller may still commit its work.
+		if writeFailed && c.DB.TxStart == nil {
+			_ = c.DB.truncate()
+		}
+	}()
 	err := c.reloadSlot()
 	var slotPtr SlotPointer
 	if err == nil {
 		slotPtr, err = c.DB.readSlotPointer(ReadWrite, path, 0, c.SlotPtr)
 	}
 	if err != nil {
-		// only truncate when the error escapes the outer write.
-		// a nested callback's caller may still commit its work.
-		if c.DB.TxStart == nil {
-			_ = c.DB.truncate()
-		}
 		return nil, err
 	}
+	writeFailed = false
 	if c.DB.TxStart == nil {
 		if err := c.DB.Core.Sync(); err != nil {
 			return nil, err

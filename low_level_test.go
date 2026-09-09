@@ -71,13 +71,15 @@ func TestFrozenWriters(t *testing.T) {
 	slot, err := history.GetSlot(0)
 	check(err)
 	assertEqual(t, slot, result.Slot())
-	check(history.AppendContext(nil, func(cursor *WriteCursor) error {
+	var frozen *ReadCursor
+	rollback := errors.New("rollback")
+	assertEqual(t, rollback, history.AppendContext(nil, func(cursor *WriteCursor) error {
 		writer, err := cursor.Writer()
 		check(err)
 		_, err = writer.Write(make([]byte, 16))
 		check(err)
 		check(writer.Finish())
-		frozen := &ReadCursor{SlotPtr: cursor.SlotPtr, DB: db}
+		frozen = &ReadCursor{SlotPtr: cursor.SlotPtr, DB: db}
 		check(db.Freeze())
 		writer.SeekTo(0)
 		_, err = writer.Write([]byte{99})
@@ -93,8 +95,34 @@ func TestFrozenWriters(t *testing.T) {
 		if !bytes.Equal(make([]byte, 16), value) {
 			t.Fatal("frozen bytes changed")
 		}
-		return nil
+		return rollback
 	}))
+	value, err := frozen.ReadBytes(1024)
+	check(err)
+	if !bytes.Equal(make([]byte, 16), value) {
+		t.Fatal("frozen bytes changed after rollback")
+	}
+	appended, err := history.AppendCursor()
+	check(err)
+	assertEqual(t, TagNone, appended.Slot().Tag)
+	slot, err = history.GetSlot(-1)
+	check(err)
+	assertEqual(t, Slot{}, slot)
+	func() {
+		defer func() { assertEqual(t, any(rollback), recover()) }()
+		check(history.AppendContext(NewBytes(make([]byte, 16)), func(cursor *WriteCursor) error {
+			panic(rollback)
+		}))
+	}()
+	check(history.Append(NewString("abcdefghijklmnop")))
+	count, err := history.Count()
+	check(err)
+	assertEqual(t, int64(3), count)
+	value, err = frozen.ReadBytes(1024)
+	check(err)
+	if !bytes.Equal(make([]byte, 16), value) {
+		t.Fatal("frozen bytes changed after later writes")
+	}
 }
 
 func TestExpiredWriters(t *testing.T) {

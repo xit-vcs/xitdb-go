@@ -685,6 +685,23 @@ func (db *Database) truncate() error {
 	if err != nil {
 		return err
 	}
+	active := db.transaction
+	if active != nil && active.frozenAt != nil && *active.frozenAt > committedSize {
+		// retain frozen bytes without publishing the failed transaction
+		if err := db.Core.Sync(); err != nil {
+			return err
+		}
+		if err := db.Core.SeekTo(DatabaseStart + ArrayListHeaderLength); err != nil {
+			return err
+		}
+		if err := writeLong(db.Core, *active.frozenAt); err != nil {
+			return err
+		}
+		if err := db.Core.Sync(); err != nil {
+			return err
+		}
+		committedSize = *active.frozenAt
+	}
 	fileSize, err := db.Core.Length()
 	if err != nil {
 		return err
@@ -760,13 +777,10 @@ func (db *Database) readSlotPointer(writeMode WriteMode, path []PathPart, pathI 
 		db.TxStart = &length
 	}
 
-	result, err := part.readSlotPointer(db, isTopLevel, writeMode, path, pathI, slotPtr)
-
 	if isTxStart {
-		db.TxStart = nil
+		defer func() { db.TxStart = nil }()
 	}
-
-	return result, err
+	return part.readSlotPointer(db, isTopLevel, writeMode, path, pathI, slotPtr)
 }
 
 // HashMap methods
@@ -1160,6 +1174,18 @@ func (db *Database) readArrayListSlotAppend(header ArrayListHeader, writeMode Wr
 
 	slotPtr, err := db.readArrayListSlot(indexPos, key, nextShift, writeMode, isTopLevel)
 	if err != nil {
+		return ArrayListAppendResult{}, err
+	}
+	// clear values left by a rollback or slice
+	slotPtr = slotPtr.WithSlot(Slot{})
+	if slotPtr.Position == nil {
+		return ArrayListAppendResult{}, ErrCursorNotWriteable
+	}
+	if err := db.Core.SeekTo(*slotPtr.Position); err != nil {
+		return ArrayListAppendResult{}, err
+	}
+	b := slotPtr.Slot.ToBytes()
+	if err := db.Core.Write(b[:]); err != nil {
 		return ArrayListAppendResult{}, err
 	}
 	return ArrayListAppendResult{
