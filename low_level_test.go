@@ -108,6 +108,13 @@ func TestExpiredWriters(t *testing.T) {
 	check(err)
 	history, err := NewWriteArrayList(db.RootCursor())
 	check(err)
+	_, err = db.RootCursor().WritePath([]PathPart{
+		Context{Function: func(cursor *WriteCursor) error { return history.Append(NewInt(999)) }},
+	})
+	assertEqual(t, error(ErrNestedTopLevelWrite), err)
+	count, err := history.Count()
+	check(err)
+	assertEqual(t, int64(0), count)
 	var escaped *WriteHashMap
 	var writer *CursorWriter
 	reject := func() {
@@ -127,7 +134,10 @@ func TestExpiredWriters(t *testing.T) {
 		check(err)
 		_, err = writer.Write(make([]byte, 16))
 		check(err)
-		return writer.Finish()
+		check(writer.Finish())
+		assertEqual(t, error(ErrNestedTopLevelWrite), history.Append(NewInt(999)))
+		assertEqual(t, error(ErrNestedTopLevelWrite), history.Slice(0))
+		return nil
 	}))
 	reject()
 	slot, err := history.GetSlot(0)

@@ -3,6 +3,7 @@ package xitdb
 import "errors"
 
 var (
+	ErrNestedTopLevelWrite      = errors.New("nested top-level writes are not allowed")
 	ErrFrozenSlot               = errors.New("writer points into frozen data; reacquire it from the transaction root")
 	ErrFrozenBytes              = errors.New("byte writer points into frozen data")
 	ErrExpiredTransaction       = errors.New("writer belongs to an expired transaction")

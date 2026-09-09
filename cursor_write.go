@@ -43,6 +43,10 @@ func (c *WriteCursor) WritePath(path []PathPart) (*WriteCursor, error) {
 	if err := c.checkWritable(); err != nil {
 		return nil, err
 	}
+	// nested top-level writes could commit before the outer transaction ends
+	if c.DB.transaction != nil && c.SlotPtr.Position == nil && len(path) > 0 {
+		return nil, ErrNestedTopLevelWrite
+	}
 	initializesHistory := false
 	if len(path) > 0 {
 		switch path[0].(type) {
