@@ -10,6 +10,74 @@ import (
 	"testing"
 )
 
+func TestExpiredWriters(t *testing.T) {
+	check := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	db, err := NewDatabase(NewCoreMemory(), sha1Hasher())
+	check(err)
+	history, err := NewWriteArrayList(db.RootCursor())
+	check(err)
+	var escaped *WriteHashMap
+	var writer *CursorWriter
+	reject := func() {
+		t.Helper()
+		assertEqual(t, error(ErrExpiredTransaction), escaped.Put("v", NewInt(999)))
+		_, err := writer.Write([]byte{1})
+		assertEqual(t, error(ErrExpiredTransaction), err)
+		assertEqual(t, error(ErrExpiredTransaction), writer.Finish())
+	}
+	check(history.AppendContext(nil, func(cursor *WriteCursor) error {
+		escaped, err = NewWriteHashMap(cursor)
+		check(err)
+		check(escaped.Put("v", NewInt(1)))
+		bytesCursor, err := escaped.PutCursor("bytes")
+		check(err)
+		writer, err = bytesCursor.Writer()
+		check(err)
+		_, err = writer.Write(make([]byte, 16))
+		check(err)
+		return writer.Finish()
+	}))
+	reject()
+	slot, err := history.GetSlot(0)
+	check(err)
+	check(history.AppendContext(slot, func(cursor *WriteCursor) error {
+		reject()
+		current, err := NewWriteHashMap(cursor)
+		check(err)
+		return current.Put("v", NewInt(2))
+	}))
+	readValue := func(index int64) int64 {
+		t.Helper()
+		cursor, err := history.GetCursor(index)
+		check(err)
+		moment, err := NewReadHashMap(cursor)
+		check(err)
+		valueCursor, err := moment.GetCursor("v")
+		check(err)
+		value, err := valueCursor.ReadInt()
+		check(err)
+		return value
+	}
+	assertEqual(t, int64(1), readValue(0))
+	assertEqual(t, int64(2), readValue(1))
+	rollback := errors.New("rollback")
+	assertEqual(t, rollback, history.AppendContext(nil, func(cursor *WriteCursor) error {
+		escaped, err = NewWriteHashMap(cursor)
+		check(err)
+		return rollback
+	}))
+	reject()
+	slot, err = history.GetSlot(1)
+	check(err)
+	check(history.AppendContext(slot, func(cursor *WriteCursor) error { reject(); return nil }))
+	assertEqual(t, int64(2), readValue(2))
+}
+
 func TestLowLevelApi(t *testing.T) {
 	// CoreMemory
 	{
@@ -1003,11 +1071,9 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				WriteData{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
+				WriteData{Data: NewString("longstring")},
 			})
 			if err != nil {
-				t.Fatal(err)
-			}
-			if err := barCursor.Write(NewString("longstring")); err != nil {
 				t.Fatal(err)
 			}
 
@@ -1026,11 +1092,9 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 					WriteData{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
+					Context{Function: func(cursor *WriteCursor) error { return cursor.WriteIfEmpty(NewString("longstring")) }},
 				})
 				if err != nil {
-					t.Fatal(err)
-				}
-				if err := nextBarCursor.WriteIfEmpty(NewString("longstring")); err != nil {
 					t.Fatal(err)
 				}
 				assertEqual(t, barCursor.Slot().Value, nextBarCursor.Slot().Value)
@@ -1048,11 +1112,9 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 					WriteData{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
+					WriteData{Data: NewString("longstring")},
 				})
 				if err != nil {
-					t.Fatal(err)
-				}
-				if err := nextBarCursor.Write(NewString("longstring")); err != nil {
 					t.Fatal(err)
 				}
 				if barCursor.Slot().Value == nextBarCursor.Slot().Value {
@@ -1089,11 +1151,9 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 				WriteData{Data: lastSlot},
 				HashMapInitPart{},
 				HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
+				WriteData{Data: NewString("shortstr")},
 			})
 			if err != nil {
-				t.Fatal(err)
-			}
-			if err := barCursor.Write(NewString("shortstr")); err != nil {
 				t.Fatal(err)
 			}
 
@@ -1131,11 +1191,9 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 					WriteData{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
+					WriteData{Data: NewTaggedString("shortstr", "st")},
 				})
 				if err != nil {
-					t.Fatal(err)
-				}
-				if err := barCursor.Write(NewTaggedString("shortstr", "st")); err != nil {
 					t.Fatal(err)
 				}
 
@@ -1186,11 +1244,9 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 					WriteData{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
+					WriteData{Data: NewTaggedString("shorts", "st")},
 				})
 				if err != nil {
-					t.Fatal(err)
-				}
-				if err := barCursor.Write(NewTaggedString("shorts", "st")); err != nil {
 					t.Fatal(err)
 				}
 
@@ -1241,11 +1297,9 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 					WriteData{Data: lastSlot},
 					HashMapInitPart{},
 					HashMapGetPart{Target: HashMapGetValue{Hash: barKey}},
+					WriteData{Data: NewTaggedString("short", "st")},
 				})
 				if err != nil {
-					t.Fatal(err)
-				}
-				if err := barCursor.Write(NewTaggedString("short", "st")); err != nil {
 					t.Fatal(err)
 				}
 

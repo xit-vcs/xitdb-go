@@ -413,11 +413,17 @@ type ContextFunction func(cursor *WriteCursor) error
 
 // Database
 
+type transaction struct {
+	// keep transaction pointers distinct
+	_ byte
+}
+
 type Database struct {
-	Core    Core
-	newHash func() hash.Hash
-	Header  Header
-	TxStart *int64
+	Core        Core
+	newHash     func() hash.Hash
+	Header      Header
+	TxStart     *int64
+	transaction *transaction
 }
 
 func NewDatabase(core Core, hasher Hasher) (*Database, error) {

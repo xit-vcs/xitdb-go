@@ -1405,7 +1405,7 @@ func (p WriteData) readSlotPointer(db *Database, isTopLevel bool, writeMode Writ
 			}
 			slot = Slot{Value: int64(binary.BigEndian.Uint64(buf[:])), Tag: TagShortBytes, Full: data.FormatTag != nil}
 		} else {
-			nextCursor := &WriteCursor{ReadCursor: &ReadCursor{SlotPtr: slotPtr, DB: db}}
+			nextCursor := newWriteCursor(slotPtr, db)
 			cursorWriter, err := nextCursor.Writer()
 			if err != nil {
 				return SlotPointer{}, err
@@ -1453,7 +1453,7 @@ func (p Context) readSlotPointer(db *Database, isTopLevel bool, writeMode WriteM
 		return SlotPointer{}, ErrPathPartMustBeAtEnd
 	}
 
-	nextCursor := &WriteCursor{ReadCursor: &ReadCursor{SlotPtr: slotPtr, DB: db}}
+	nextCursor := newWriteCursor(slotPtr, db)
 	err := p.Function(nextCursor)
 	if err != nil {
 		return SlotPointer{}, err

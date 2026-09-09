@@ -3,6 +3,7 @@ package xitdb
 import "errors"
 
 var (
+	ErrExpiredTransaction       = errors.New("writer belongs to an expired transaction")
 	ErrInvalidDatabase          = errors.New("invalid database")
 	ErrTruncatedDatabase        = errors.New("truncated database")
 	ErrInvalidVersion           = errors.New("invalid version")

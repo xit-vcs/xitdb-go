@@ -2,9 +2,44 @@ package xitdb
 
 type WriteCursor struct {
 	*ReadCursor
+	transaction *transaction
+}
+
+func newWriteCursor(slotPtr SlotPointer, db *Database) *WriteCursor {
+	cursor := &WriteCursor{ReadCursor: &ReadCursor{SlotPtr: slotPtr, DB: db}}
+	if slotPtr.Position != nil {
+		cursor.transaction = db.transaction
+	}
+	return cursor
+}
+
+func (c *WriteCursor) checkWrite() error {
+	if c.transaction != nil && c.transaction != c.DB.transaction {
+		return ErrExpiredTransaction
+	}
+	if c.SlotPtr.Position != nil && c.DB.Header.Tag == TagArrayList && c.transaction == nil {
+		return ErrExpectedTxStart
+	}
+	return nil
 }
 
 func (c *WriteCursor) WritePath(path []PathPart) (*WriteCursor, error) {
+	if err := c.checkWrite(); err != nil {
+		return nil, err
+	}
+	initializesHistory := false
+	if len(path) > 0 {
+		switch path[0].(type) {
+		case ArrayListInit, *ArrayListInit:
+			initializesHistory = true
+		}
+	}
+	startsTransaction := c.DB.transaction == nil && c.SlotPtr.Position == nil &&
+		(c.DB.Header.Tag == TagArrayList || initializesHistory)
+	if startsTransaction {
+		c.DB.transaction = &transaction{}
+		defer func() { c.DB.transaction = nil }()
+	}
 	slotPtr, err := c.DB.readSlotPointer(ReadWrite, path, 0, c.SlotPtr)
 	if err != nil {
 		// only truncate when the error escapes the outer write.
@@ -19,7 +54,7 @@ func (c *WriteCursor) WritePath(path []PathPart) (*WriteCursor, error) {
 			return nil, err
 		}
 	}
-	return &WriteCursor{ReadCursor: &ReadCursor{SlotPtr: slotPtr, DB: c.DB}}, nil
+	return newWriteCursor(slotPtr, c.DB), nil
 }
 
 func (c *WriteCursor) Write(data WriteableData) error {
@@ -32,6 +67,9 @@ func (c *WriteCursor) Write(data WriteableData) error {
 }
 
 func (c *WriteCursor) WriteIfEmpty(data WriteableData) error {
+	if err := c.checkWrite(); err != nil {
+		return err
+	}
 	if c.SlotPtr.Slot.Empty() {
 		return c.Write(data)
 	}
@@ -52,8 +90,8 @@ func (c *WriteCursor) ReadKeyValuePair() (*WriteKVPairCursor, error) {
 		return nil, err
 	}
 	return &WriteKVPairCursor{
-		ValueCursor: &WriteCursor{ReadCursor: readKVP.ValueCursor},
-		KeyCursor:   &WriteCursor{ReadCursor: readKVP.KeyCursor},
+		ValueCursor: &WriteCursor{ReadCursor: readKVP.ValueCursor, transaction: c.transaction},
+		KeyCursor:   &WriteCursor{ReadCursor: readKVP.KeyCursor, transaction: c.transaction},
 		Hash:        readKVP.Hash,
 	}, nil
 }
@@ -70,6 +108,9 @@ type CursorWriter struct {
 }
 
 func (c *WriteCursor) Writer() (*CursorWriter, error) {
+	if err := c.checkWrite(); err != nil {
+		return nil, err
+	}
 	ptrPos, err := c.DB.Core.Length()
 	if err != nil {
 		return nil, err
@@ -94,6 +135,9 @@ func (c *WriteCursor) Writer() (*CursorWriter, error) {
 }
 
 func (w *CursorWriter) Write(p []byte) (int, error) {
+	if err := w.parent.checkWrite(); err != nil {
+		return 0, err
+	}
 	if w.size < w.relativePosition {
 		return 0, ErrEndOfStream
 	}
@@ -125,6 +169,9 @@ func (w *CursorWriter) Write(p []byte) (int, error) {
 }
 
 func (w *CursorWriter) Finish() error {
+	if err := w.parent.checkWrite(); err != nil {
+		return err
+	}
 	if w.FormatTag != nil {
 		w.slot = w.slot.WithFull(true)
 		formatTagPos, err := w.parent.DB.Core.Length()
