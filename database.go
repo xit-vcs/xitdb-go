@@ -720,7 +720,7 @@ func (db *Database) readSlotPointer(writeMode WriteMode, path []PathPart, pathI 
 
 	isTopLevel := slotPtr.Slot.Value == int64(DatabaseStart)
 
-	isTxStart := isTopLevel && db.Header.Tag == TagArrayList && db.TxStart == nil
+	isTxStart := writeMode == ReadWrite && isTopLevel && db.Header.Tag == TagArrayList && db.TxStart == nil
 	if isTxStart {
 		length, err := db.Core.Length()
 		if err != nil {
