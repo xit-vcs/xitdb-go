@@ -41,6 +41,11 @@ if err != nil {
     log.Fatal(err)
 }
 
+// acquire an exclusive file lock (only needed when writing)
+if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+    log.Fatal(err)
+}
+
 // init the db
 core := xitdb.NewCoreBufferedFile(f)
 defer core.Close()
@@ -1052,4 +1057,4 @@ This compacted database will be in a separate file. If you want to delete the or
 
 ## Thread Safety
 
-It is possible to read the database from multiple threads/goroutines without locks, even while writes are happening. This is a big benefit of immutable databases. However, each thread needs to use its own `Database` instance. See [the multithreading test](https://github.com/xit-vcs/xitdb-go/blob/22c320fd08cd482ebf9fcfcb45e4bafb19e2a84e/high_level_test.go#L555) for an example of this. Also, keep in mind that writes still need to come from one thread at a time.
+It is possible to read the database from multiple threads/goroutines without locks, even while writes are happening. This is a big benefit of immutable databases. However, each thread needs to use its own `Database` instance. See [the multithreading test](https://github.com/xit-vcs/xitdb-go/blob/22c320fd08cd482ebf9fcfcb45e4bafb19e2a84e/high_level_test.go#L555) for an example of this. Also, keep in mind that writes still need to come from one thread at a time; see the example at the top of this file, where it acquires an exclusive file lock.
