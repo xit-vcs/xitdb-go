@@ -150,6 +150,9 @@ type ArrayListGet struct {
 }
 
 func (p ArrayListGet) readSlotPointer(db *Database, isTopLevel bool, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+	if writeMode == ReadWrite && isTopLevel && db.Header.Tag == TagArrayList {
+		return SlotPointer{}, ErrWriteNotAllowed
+	}
 	tag := slotPtr.Slot.Tag
 	if isTopLevel {
 		tag = db.Header.Tag
@@ -1521,6 +1524,9 @@ type Context struct {
 func (p Context) readSlotPointer(db *Database, isTopLevel bool, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
 	if writeMode == ReadOnly {
 		return SlotPointer{}, ErrWriteNotAllowed
+	}
+	if isTopLevel && db.Header.Tag == TagArrayList {
+		return SlotPointer{}, ErrCursorNotWriteable
 	}
 	if pathI != len(path)-1 {
 		return SlotPointer{}, ErrPathPartMustBeAtEnd

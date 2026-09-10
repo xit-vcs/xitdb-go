@@ -146,6 +146,9 @@ func (c *WriteCursor) Writer() (*CursorWriter, error) {
 	if err := c.checkWritable(); err != nil {
 		return nil, err
 	}
+	if c.DB.Header.Tag == TagArrayList && c.DB.TxStart == nil {
+		return nil, ErrExpectedTxStart
+	}
 	ptrPos, err := c.DB.Core.Length()
 	if err != nil {
 		return nil, err
@@ -244,6 +247,9 @@ func (w *CursorWriter) Finish() error {
 	}
 
 	w.parent.SlotPtr = w.parent.SlotPtr.WithSlot(w.slot)
+	if w.parent.DB.TxStart == nil {
+		return w.parent.DB.Core.Sync()
+	}
 	return nil
 }
 
@@ -251,6 +257,9 @@ func (w *CursorWriter) Finish() error {
 func (w *CursorWriter) checkWritable() error {
 	if err := w.parent.checkWritable(); err != nil {
 		return err
+	}
+	if w.parent.DB.Header.Tag == TagArrayList && w.parent.DB.TxStart == nil {
+		return ErrExpectedTxStart
 	}
 	active := w.parent.DB.transaction
 	if active != nil && active.frozenAt != nil && w.slot.Value < *active.frozenAt {

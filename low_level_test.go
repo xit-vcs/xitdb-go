@@ -139,7 +139,7 @@ func TestExpiredWriters(t *testing.T) {
 	_, err = db.RootCursor().WritePath([]PathPart{
 		Context{Function: func(cursor *WriteCursor) error { return history.Append(NewInt(999)) }},
 	})
-	assertEqual(t, error(ErrNestedTopLevelWrite), err)
+	assertEqual(t, error(ErrCursorNotWriteable), err)
 	count, err := history.Count()
 	check(err)
 	assertEqual(t, int64(0), count)
@@ -2314,9 +2314,14 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 		}
 
 		// slice the inner array list so it contains exactly SLOT_COUNT
+		lastMoment, err := rootCursor.ReadPathSlot([]PathPart{ArrayListGet{Index: -1}})
+		if err != nil {
+			t.Fatal(err)
+		}
 		_, err = rootCursor.WritePath([]PathPart{
 			ArrayListInit{},
-			ArrayListGet{Index: -1},
+			ArrayListAppend{},
+			WriteData{Data: lastMoment},
 			ArrayListInit{},
 			ArrayListSlice{Size: int64(SlotCount)},
 		})
@@ -2510,9 +2515,14 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 
 		// set first slot to .none and make sure iteration still works
 		{
+			lastMoment, err := rootCursor.ReadPathSlot([]PathPart{ArrayListGet{Index: -1}})
+			if err != nil {
+				t.Fatal(err)
+			}
 			_, err = rootCursor.WritePath([]PathPart{
 				ArrayListInit{},
-				ArrayListGet{Index: -1},
+				ArrayListAppend{},
+				WriteData{Data: lastMoment},
 				ArrayListInit{},
 				ArrayListGet{Index: 0},
 				WriteData{Data: nil},

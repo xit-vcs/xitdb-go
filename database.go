@@ -612,28 +612,10 @@ func (db *Database) Compact(targetCore Core) (*Database, error) {
 		return nil, fmt.Errorf("write target db header: %w", err)
 	}
 
-	// flush, update file_size, flush again
-	if err := target.Core.Flush(); err != nil {
-		return nil, fmt.Errorf("flush: %w", err)
-	}
-	fileSize, err := target.Core.Length()
-	if err != nil {
-		return nil, fmt.Errorf("get file size: %w", err)
-	}
-	if err := target.Core.SeekTo(int64(DatabaseStart) + int64(ArrayListHeaderLength)); err != nil {
-		return nil, fmt.Errorf("write file size: %w", err)
-	}
-	if err := writeLong(target.Core, fileSize); err != nil {
-		return nil, fmt.Errorf("write file size: %w", err)
-	}
-	if err := target.Core.Flush(); err != nil {
-		return nil, fmt.Errorf("final flush: %w", err)
-	}
-
 	// fsync so the compacted database is durable, since callers
 	// typically rename it over an existing database file
-	if err := target.Core.Sync(); err != nil {
-		return nil, fmt.Errorf("sync: %w", err)
+	if err := target.updateCommittedSize(); err != nil {
+		return nil, fmt.Errorf("update committed size: %w", err)
 	}
 
 	return target, nil
@@ -712,6 +694,36 @@ func (db *Database) truncate() error {
 	return nil
 }
 
+func (db *Database) updateCommittedSize() error {
+	if err := db.Core.Sync(); err != nil {
+		return err
+	}
+	if db.Header.Tag != TagArrayList {
+		return nil
+	}
+	if err := db.Core.SeekTo(DatabaseStart + ArrayListHeaderLength); err != nil {
+		return err
+	}
+	committedSize, err := readLong(db.Core)
+	if err != nil {
+		return err
+	}
+	fileSize, err := db.Core.Length()
+	if err != nil {
+		return err
+	}
+	if fileSize == committedSize {
+		return nil
+	}
+	if err := db.Core.SeekTo(DatabaseStart + ArrayListHeaderLength); err != nil {
+		return err
+	}
+	if err := writeLong(db.Core, fileSize); err != nil {
+		return err
+	}
+	return db.Core.Sync()
+}
+
 // checkHash
 
 func (db *Database) checkHash(hash []byte) ([]byte, error) {
@@ -766,10 +778,14 @@ func (db *Database) readSlotPointer(writeMode WriteMode, path []PathPart, pathI 
 	}
 	part := path[pathI]
 
-	isTopLevel := slotPtr.Slot.Value == int64(DatabaseStart)
+	isTopLevel := slotPtr.Position == nil && slotPtr.Slot.Value == int64(DatabaseStart)
 
 	isTxStart := writeMode == ReadWrite && isTopLevel && db.Header.Tag == TagArrayList && db.TxStart == nil
 	if isTxStart {
+		// discard data left by an unfinished transaction after a crash.
+		if err := db.truncate(); err != nil {
+			return SlotPointer{}, err
+		}
 		length, err := db.Core.Length()
 		if err != nil {
 			return SlotPointer{}, err
@@ -1233,14 +1249,7 @@ func (db *Database) readArrayListSlot(indexPos int64, key int64, shift byte, wri
 				return SlotPointer{}, err
 			}
 			if isTopLevel {
-				fileSize, err := db.Core.Length()
-				if err != nil {
-					return SlotPointer{}, err
-				}
-				if err := db.Core.SeekTo(int64(DatabaseStart) + int64(ArrayListHeaderLength)); err != nil {
-					return SlotPointer{}, err
-				}
-				if err := writeLong(db.Core, fileSize); err != nil {
+				if err := db.updateCommittedSize(); err != nil {
 					return SlotPointer{}, err
 				}
 			}

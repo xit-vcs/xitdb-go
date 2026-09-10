@@ -1611,7 +1611,8 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 	}
 
 	// opening the db leaves trailing data alone, because it may
-	// belong to another writer's unfinished transaction.
+	// belong to another writer's unfinished transaction. the next
+	// write transaction truncates it before allocating new data.
 	{
 		coreLen, err := core.Length()
 		if err != nil {
@@ -1656,6 +1657,14 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			t.Fatal(err)
 		}
 		assertEqual(t, sizeWithTail, sizeAfter)
+		if _, err := NewWriteArrayList(db.RootCursor()); err != nil {
+			t.Fatal(err)
+		}
+		sizeAfter, err = core.Length()
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertEqual(t, coreLen, sizeAfter)
 	}
 
 	// cloning

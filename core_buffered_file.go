@@ -119,7 +119,13 @@ func (c *CoreBufferedFile) Length() (int64, error) {
 		return 0, err
 	}
 	fileLen := info.Size()
-	memLen := c.memoryPos + c.memorySize()
+	bufferSize := c.memorySize()
+	// a failed allocation after seeking past eof can leave an empty
+	// buffer beyond the file's end, even after rollback.
+	if bufferSize == 0 {
+		return fileLen, nil
+	}
+	memLen := c.memoryPos + bufferSize
 	if memLen > fileLen {
 		return memLen, nil
 	}
