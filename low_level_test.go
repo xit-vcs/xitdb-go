@@ -278,6 +278,52 @@ func TestLowLevelMemoryOperations(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertEqual(t, "goodbye, cruel world!", string(allBytes))
+
+	check := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	check(core.SetLength(0))
+	data := []byte{1, 2, 3, 4}
+	check(core.Write(data))
+	check(core.SeekTo(1))
+
+	// invalid lengths must leave the contents and position alone
+	for _, length := range []int64{5, -1, -1 << 63} {
+		if err := core.SetLength(length); err == nil {
+			t.Fatalf("expected invalid length error for %d", length)
+		}
+		position, err := core.Position()
+		check(err)
+		assertEqual(t, int64(1), position)
+		assertEqual(t, string(data), string(core.buf))
+	}
+
+	// truncation preserves an earlier position and clamps one past the end
+	check(core.SetLength(3))
+	position, err := core.Position()
+	check(err)
+	assertEqual(t, int64(1), position)
+	check(core.SetLength(3))
+	position, err = core.Position()
+	check(err)
+	assertEqual(t, int64(1), position)
+	check(core.SeekTo(3))
+	check(core.SetLength(2))
+	length, err := core.Length()
+	check(err)
+	assertEqual(t, int64(2), length)
+	position, err = core.Position()
+	check(err)
+	assertEqual(t, int64(2), position)
+	assertEqual(t, string([]byte{1, 2}), string(core.buf))
+	if err := core.Read(make([]byte, 1)); err == nil {
+		t.Fatal("expected end of memory error")
+	}
+	check(core.Write([]byte{9}))
+	assertEqual(t, string([]byte{1, 2, 9}), string(core.buf))
 }
 
 func lastSlotData(t *testing.T, cursor *WriteCursor) Slot {

@@ -57,19 +57,13 @@ func (m *CoreMemory) Position() (int64, error) {
 }
 
 func (m *CoreMemory) SetLength(length int64) error {
-	if length == 0 {
-		m.buf = m.buf[:0]
-		m.pos = 0
-		return nil
+	if length < 0 || length > int64(len(m.buf)) {
+		return fmt.Errorf("invalid memory length")
 	}
-	if length > int64(len(m.buf)) {
-		return fmt.Errorf("cannot extend memory length")
-	}
-	origPos := m.pos
-	m.buf = m.buf[:length]
-	if origPos > length {
+	if length == 0 || m.pos > length {
 		m.pos = length
 	}
+	m.buf = m.buf[:length]
 	return nil
 }
 
