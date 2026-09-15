@@ -770,7 +770,7 @@ func (db *Database) copyCollectionIfFrozen(slotPtr SlotPointer, isTopLevel bool,
 
 func (db *Database) readSlotPointer(writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
 	if pathI == len(path) {
-		if writeMode == ReadOnly && slotPtr.Slot.Tag == TagNone {
+		if writeMode == ReadOnly && slotPtr.Slot.Empty() {
 			return SlotPointer{}, ErrKeyNotFound
 		}
 		return slotPtr, nil
