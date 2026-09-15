@@ -1036,7 +1036,7 @@ if err != nil {
 
 compactCore := xitdb.NewCoreBufferedFile(compactFile)
 defer compactCore.Close()
-compactDb, err := db.Compact(compactCore)
+compactDb, err := db.Compact(compactCore, make(xitdb.MemoryOffsetMap))
 if err != nil {
     log.Fatal(err)
 }
@@ -1054,6 +1054,45 @@ fmt.Println(historyCount) // 1
 ```
 
 This compacted database will be in a separate file. If you want to delete the original database and replace it with this one, you'll need to do that yourself. It is not possible to compact a database in-place (using the same file as the target database); doing so would fail and would render your original database unreadable.
+
+The offsets map records where each copied object lives in the compacted database so shared references and cycles point to the same copied object. The in-memory map grows with the number of live objects copied, so it could theoretically OOM. To avoid this, you can instead use a temporary on-disk xitdb file to track the offsets with [FileOffsetMap](file_offset_map.go):
+
+```go
+// create a scratch file and delete it when compaction is finished
+offsetsFile, err := os.CreateTemp("", "compact_offsets_*.db")
+if err != nil {
+    panic(err)
+}
+defer os.Remove(offsetsFile.Name())
+
+offsetMap, err := xitdb.NewFileOffsetMap(offsetsFile)
+if err != nil {
+    panic(err)
+}
+defer offsetMap.Close()
+
+compactFile, err := os.OpenFile("compact.db", os.O_RDWR|os.O_CREATE, 0644)
+if err != nil {
+    panic(err)
+}
+compactCore := xitdb.NewCoreBufferedFile(compactFile)
+defer compactCore.Close()
+compactDb, err := db.Compact(compactCore, offsetMap)
+if err != nil {
+    panic(err)
+}
+
+// read from the new compacted db
+history, err := xitdb.NewReadArrayList(compactDb.RootCursor().ReadCursor)
+if err != nil {
+    panic(err)
+}
+historyCount, err := history.Count()
+if err != nil {
+    panic(err)
+}
+fmt.Println(historyCount) // 1
+```
 
 ## Thread Safety
 

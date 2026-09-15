@@ -514,8 +514,12 @@ func (db *Database) Freeze() error {
 	return nil
 }
 
-func (db *Database) Compact(targetCore Core) (*Database, error) {
-	offsetMap := make(map[int64]int64)
+// resets and borrows the supplied offsets map without closing it
+func (db *Database) Compact(targetCore Core, offsetMap OffsetMap) (*Database, error) {
+	// cached offsets only apply to this compaction's target
+	if err := offsetMap.Reset(); err != nil {
+		return nil, err
+	}
 	hasher := Hasher{Hash: db.newHash, ID: db.Header.HashID}
 	target, err := NewDatabase(targetCore, hasher)
 	if err != nil {
@@ -2602,7 +2606,7 @@ type compactor struct {
 	sourceCore Core
 	targetCore Core
 	hashSize   uint16
-	offsetMap  map[int64]int64
+	offsetMap  OffsetMap
 }
 
 func (c *compactor) reserveBlock(size int) (int64, error) {
@@ -2620,7 +2624,9 @@ func (c *compactor) reserveBlock(size int) (int64, error) {
 }
 
 func (c *compactor) visitObject(sourceOffset int64, size int, populate objectPopulator) (int64, error) {
-	if targetOffset, ok := c.offsetMap[sourceOffset]; ok {
+	if targetOffset, ok, err := c.offsetMap.Get(sourceOffset); err != nil {
+		return 0, err
+	} else if ok {
 		return targetOffset, nil
 	}
 
@@ -2628,7 +2634,9 @@ func (c *compactor) visitObject(sourceOffset int64, size int, populate objectPop
 	if err != nil {
 		return 0, err
 	}
-	c.offsetMap[sourceOffset] = targetOffset
+	if err := c.offsetMap.Put(sourceOffset, targetOffset); err != nil {
+		return 0, err
+	}
 	if err := populate(sourceOffset, targetOffset); err != nil {
 		return 0, err
 	}
@@ -2667,7 +2675,9 @@ func (c *compactor) remapSlot(slot Slot) (Slot, error) {
 }
 
 func (c *compactor) remapBytes(slot Slot) (int64, error) {
-	if targetOffset, ok := c.offsetMap[slot.Value]; ok {
+	if targetOffset, ok, err := c.offsetMap.Get(slot.Value); err != nil {
+		return 0, err
+	} else if ok {
 		return targetOffset, nil
 	}
 
@@ -2712,7 +2722,9 @@ func (c *compactor) remapBytes(slot Slot) (int64, error) {
 		remaining -= chunk
 	}
 
-	c.offsetMap[slot.Value] = newOffset
+	if err := c.offsetMap.Put(slot.Value, newOffset); err != nil {
+		return 0, err
+	}
 	return newOffset, nil
 }
 
@@ -2870,7 +2882,9 @@ func (c *compactor) populateBTree(sourceOffset, targetOffset int64) error {
 }
 
 func (c *compactor) remapBTreeNode(nodeOffset int64) (int64, error) {
-	if mapped, ok := c.offsetMap[nodeOffset]; ok {
+	if mapped, ok, err := c.offsetMap.Get(nodeOffset); err != nil {
+		return 0, err
+	} else if ok {
 		return mapped, nil
 	}
 
@@ -3027,7 +3041,9 @@ func (c *compactor) populateSortedMap(sourceOffset, targetOffset int64) error {
 }
 
 func (c *compactor) remapSortedMapNode(nodeOffset int64) (int64, error) {
-	if mapped, ok := c.offsetMap[nodeOffset]; ok {
+	if mapped, ok, err := c.offsetMap.Get(nodeOffset); err != nil {
+		return 0, err
+	} else if ok {
 		return mapped, nil
 	}
 

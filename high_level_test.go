@@ -7,6 +7,7 @@ import (
 	"io"
 	"iter"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 )
@@ -2172,13 +2173,14 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 
 func TestCompaction(t *testing.T) {
 	maxRead := int64(1024)
+	offsetMap := make(MemoryOffsetMap)
 
 	// memory
 	{
 		sourceCore := NewCoreMemory()
 		targetCore := NewCoreMemory()
 		hasher := sha1Hasher()
-		testCompaction(t, sourceCore, targetCore, hasher, false, maxRead)
+		testCompaction(t, sourceCore, targetCore, hasher, false, maxRead, offsetMap)
 	}
 
 	// file
@@ -2199,7 +2201,7 @@ func TestCompaction(t *testing.T) {
 		defer sourceCore.Close()
 		defer targetCore.Close()
 		hasher := sha1Hasher()
-		testCompaction(t, sourceCore, targetCore, hasher, true, maxRead)
+		testCompaction(t, sourceCore, targetCore, hasher, true, maxRead, offsetMap)
 	}
 
 	// buffered file
@@ -2220,11 +2222,49 @@ func TestCompaction(t *testing.T) {
 		defer sourceCore.Close()
 		defer targetCore.Close()
 		hasher := sha1Hasher()
-		testCompaction(t, sourceCore, targetCore, hasher, true, maxRead)
+		testCompaction(t, sourceCore, targetCore, hasher, true, maxRead, offsetMap)
 	}
 }
 
-func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, isFile bool, maxRead int64) {
+func TestCompactionWithDiskBackedOffsetsMap(t *testing.T) {
+	tempDir := t.TempDir()
+	offsetsFile, err := os.Create(filepath.Join(tempDir, "offsets.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	offsetMap, err := NewFileOffsetMap(offsetsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer offsetMap.Close()
+	sourceFile, err := os.Create(filepath.Join(tempDir, "source.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceCore := NewCoreFile(sourceFile)
+	defer sourceCore.Close()
+	targetFile, err := os.Create(filepath.Join(tempDir, "target.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetCore := NewCoreFile(targetFile)
+	defer targetCore.Close()
+
+	// reusing a scratch map must discard offsets from previous compactions
+	if err := offsetMap.Put(0, 123); err != nil {
+		t.Fatal(err)
+	}
+
+	// reuse the existing data type, cycle, sharing, and reopening checks
+	testCompaction(t, sourceCore, targetCore, sha1Hasher(), true, 1024, offsetMap)
+	_, found, err := offsetMap.Get(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertEqual(t, false, found)
+}
+
+func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, isFile bool, maxRead int64, offsetMap OffsetMap) {
 	t.Helper()
 
 	// empty DB compaction
@@ -2235,7 +2275,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 		if err != nil {
 			t.Fatal(err)
 		}
-		compacted, err := source.Compact(targetCore)
+		compacted, err := source.Compact(targetCore, offsetMap)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2510,7 +2550,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			t.Fatal(err)
 		}
 
-		compacted, err := source.Compact(targetCore)
+		compacted, err := source.Compact(targetCore, offsetMap)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2918,7 +2958,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 			}
 		}
 
-		compacted, err := source.Compact(targetCore)
+		compacted, err := source.Compact(targetCore, offsetMap)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2999,7 +3039,9 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				t.Fatal(err)
 			}
 
-			source.Compact(targetCore)
+			if _, err := source.Compact(targetCore, offsetMap); err != nil {
+				t.Fatal(err)
+			}
 
 			if err := targetCore.SeekTo(0); err != nil {
 				t.Fatal(err)
@@ -3075,7 +3117,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 				t.Fatal(err)
 			}
 
-			compacted, err := source.Compact(targetCore)
+			compacted, err := source.Compact(targetCore, offsetMap)
 			if err != nil {
 				t.Fatal(err)
 			}
