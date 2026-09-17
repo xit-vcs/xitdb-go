@@ -155,8 +155,17 @@ func (c *CoreBufferedFile) Position() (int64, error) {
 }
 
 func (c *CoreBufferedFile) SetLength(length int64) error {
-	if err := c.Flush(); err != nil {
-		return err
+	// discard buffered bytes past the new end rather than flushing them.
+	// a rollback must not depend on writing the data it is throwing away,
+	// because that write may be what failed (e.g. the disk is full).
+	if length <= c.memoryPos {
+		if err := c.memory.SetLength(0); err != nil {
+			return err
+		}
+	} else if length < c.memoryPos+c.memorySize() {
+		if err := c.memory.SetLength(length - c.memoryPos); err != nil {
+			return err
+		}
 	}
 	if err := c.file.Truncate(length); err != nil {
 		return err
