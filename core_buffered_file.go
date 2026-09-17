@@ -11,6 +11,11 @@ type CoreBufferedFile struct {
 	bufferSize int
 	filePos    int64
 	memoryPos  int64
+	// the file's length, cached so that Length doesn't need to ask the OS
+	// every time data is allocated. another process may write to the file
+	// whenever this one isn't, so it is only set once we begin writing, and
+	// it is cleared when the writes are flushed.
+	fileLen *int64
 }
 
 func NewCoreBufferedFile(f *os.File) *CoreBufferedFile {
@@ -80,13 +85,34 @@ func (c *CoreBufferedFile) Read(p []byte) error {
 }
 
 func (c *CoreBufferedFile) Write(p []byte) error {
-	if c.memorySize()+int64(len(p)) > int64(c.bufferSize) {
+	n := int64(len(p))
+	if n == 0 {
+		return nil
+	}
+
+	// the in-memory buffer is a single contiguous window of the file
+	// starting at memoryPos. start a new window at this position if
+	// the buffer is empty, the write is past the end of the window,
+	// or the write would grow the window beyond the max size.
+	if c.memorySize() == 0 ||
+		c.filePos > c.memoryPos+c.memorySize() ||
+		(c.filePos >= c.memoryPos && c.filePos-c.memoryPos+n > int64(c.bufferSize)) {
 		if err := c.Flush(); err != nil {
 			return err
 		}
+		c.memoryPos = c.filePos
 	}
 
-	if c.filePos >= c.memoryPos && c.filePos <= c.memoryPos+c.memorySize() {
+	if c.fileLen == nil {
+		fileLen, err := c.statLength()
+		if err != nil {
+			return err
+		}
+		c.fileLen = &fileLen
+	}
+
+	if c.filePos >= c.memoryPos && c.filePos-c.memoryPos+n <= int64(c.bufferSize) {
+		// write to the in-memory buffer
 		if err := c.memory.SeekTo(c.filePos - c.memoryPos); err != nil {
 			return err
 		}
@@ -96,57 +122,50 @@ func (c *CoreBufferedFile) Write(p []byte) error {
 	} else {
 		// a direct disk write that overlaps the buffered region would be
 		// clobbered by a later flush of stale buffer bytes, so flush first
-		if c.filePos < c.memoryPos+c.memorySize() && c.filePos+int64(len(p)) > c.memoryPos {
+		if c.filePos < c.memoryPos+c.memorySize() && c.filePos+n > c.memoryPos {
 			if err := c.Flush(); err != nil {
 				return err
 			}
 		}
-		if _, err := c.file.Seek(c.filePos, 0); err != nil {
-			return err
-		}
-		if _, err := c.file.Write(p); err != nil {
+		if err := c.writeToFile(c.filePos, p); err != nil {
 			return err
 		}
 	}
 
-	c.filePos += int64(len(p))
+	c.filePos += n
 	return nil
 }
 
-func (c *CoreBufferedFile) Length() (int64, error) {
+func (c *CoreBufferedFile) statLength() (int64, error) {
 	info, err := c.file.Stat()
 	if err != nil {
 		return 0, err
 	}
-	fileLen := info.Size()
+	return info.Size(), nil
+}
+
+func (c *CoreBufferedFile) Length() (int64, error) {
+	var fileLen int64
+	if c.fileLen != nil {
+		fileLen = *c.fileLen
+	} else {
+		var err error
+		fileLen, err = c.statLength()
+		if err != nil {
+			return 0, err
+		}
+	}
 	bufferSize := c.memorySize()
-	// a failed allocation after seeking past eof can leave an empty
-	// buffer beyond the file's end, even after rollback.
+	// a failed allocation or a rollback can leave an empty
+	// buffer positioned beyond the file's end.
 	if bufferSize == 0 {
 		return fileLen, nil
 	}
-	memLen := c.memoryPos + bufferSize
-	if memLen > fileLen {
-		return memLen, nil
-	}
-	return fileLen, nil
+	return max(c.memoryPos+bufferSize, fileLen), nil
 }
 
 func (c *CoreBufferedFile) SeekTo(pos int64) error {
-	// flush if we are going past the end of the in-memory buffer
-	if pos > c.memoryPos+c.memorySize() {
-		if err := c.Flush(); err != nil {
-			return err
-		}
-	}
-
 	c.filePos = pos
-
-	// if the buffer is empty, set its position to this offset as well
-	if c.memorySize() == 0 {
-		c.memoryPos = pos
-	}
-
 	return nil
 }
 
@@ -167,6 +186,7 @@ func (c *CoreBufferedFile) SetLength(length int64) error {
 			return err
 		}
 	}
+	c.fileLen = nil
 	if err := c.file.Truncate(length); err != nil {
 		return err
 	}
@@ -177,16 +197,32 @@ func (c *CoreBufferedFile) SetLength(length int64) error {
 }
 
 func (c *CoreBufferedFile) Flush() error {
+	c.fileLen = nil
 	if c.memorySize() > 0 {
-		if _, err := c.file.Seek(c.memoryPos, 0); err != nil {
+		if err := c.writeToFile(c.memoryPos, c.memory.buf); err != nil {
 			return err
 		}
-		if _, err := c.file.Write(c.memory.buf); err != nil {
-			return err
-		}
-		c.memoryPos = 0
 		c.memory.buf = c.memory.buf[:0]
 		c.memory.pos = 0
+	}
+	return nil
+}
+
+func (c *CoreBufferedFile) writeToFile(pos int64, p []byte) error {
+	// if the write fails partway, the file's length is unknown
+	fileLen := c.fileLen
+	c.fileLen = nil
+
+	if _, err := c.file.Seek(pos, 0); err != nil {
+		return err
+	}
+	if _, err := c.file.Write(p); err != nil {
+		return err
+	}
+
+	if fileLen != nil {
+		newLen := max(*fileLen, pos+int64(len(p)))
+		c.fileLen = &newLen
 	}
 	return nil
 }
