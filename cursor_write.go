@@ -47,6 +47,17 @@ func (c *WriteCursor) WritePath(path []PathPart) (*WriteCursor, error) {
 	if c.DB.transaction != nil && c.SlotPtr.Position == nil && len(path) > 0 {
 		return nil, ErrNestedTopLevelWrite
 	}
+	// the root tag only changes once, when the top-level data is initialized.
+	// if we haven't seen that happen, another instance may have done it since
+	// we read the header. initializing it again would discard its data.
+	// RootCursor checks as well, but this cursor may be older than that.
+	if c.SlotPtr.Position == nil && c.SlotPtr.Slot.Value == int64(DatabaseStart) && c.DB.Header.Tag == TagNone {
+		header, err := c.DB.readAndValidateHeader()
+		if err != nil {
+			return nil, err
+		}
+		c.DB.Header = header
+	}
 	initializesHistory := false
 	if len(path) > 0 {
 		switch path[0].(type) {

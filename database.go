@@ -456,16 +456,9 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 			return nil, fmt.Errorf("flush: %w", err)
 		}
 	} else {
-		header, err := ReadHeader(core)
+		header, err := db.readAndValidateHeader()
 		if err != nil {
-			return nil, fmt.Errorf("read header: %w", err)
-		}
-		if err := header.Validate(); err != nil {
-			return nil, fmt.Errorf("validate header: %w", err)
-		}
-		digestLen := uint16(db.newHash().Size())
-		if header.HashSize != digestLen {
-			return nil, ErrInvalidHashSize
+			return nil, err
 		}
 		db.Header = header
 		if _, err := db.validateCommittedSize(); err != nil {
@@ -483,14 +476,30 @@ func (db *Database) digest(data []byte) []byte {
 	return digest.Sum(nil)
 }
 
+func (db *Database) readAndValidateHeader() (Header, error) {
+	if err := db.Core.SeekTo(0); err != nil {
+		return Header{}, fmt.Errorf("seek: %w", err)
+	}
+	header, err := ReadHeader(db.Core)
+	if err != nil {
+		return Header{}, fmt.Errorf("read header: %w", err)
+	}
+	if err := header.Validate(); err != nil {
+		return Header{}, fmt.Errorf("validate header: %w", err)
+	}
+	if header.HashSize != uint16(db.newHash().Size()) {
+		return Header{}, ErrInvalidHashSize
+	}
+	return header, nil
+}
+
 func (db *Database) RootCursor() *WriteCursor {
-	// if the header tag is none, try re-reading it.
-	// this may be necessary if the database was initialized on a different thread.
+	// another instance may have initialized the top-level data since we
+	// read the header. if this fails, the cursor sees an empty database,
+	// and the error will be returned when it is written to.
 	if db.Header.Tag == TagNone {
-		if err := db.Core.SeekTo(0); err == nil {
-			if header, err := ReadHeader(db.Core); err == nil {
-				db.Header = header
-			}
+		if header, err := db.readAndValidateHeader(); err == nil {
+			db.Header = header
 		}
 	}
 	rc := &ReadCursor{
