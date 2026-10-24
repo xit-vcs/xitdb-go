@@ -29,6 +29,7 @@ This database was originally made for the [xit version control system](https://g
 * [Iterators](#iterators)
 * [Hashing](#hashing)
 * [Compaction](#compaction)
+* [Replication](#replication)
 * [Thread Safety](#thread-safety)
 
 ## Example
@@ -55,8 +56,8 @@ if err != nil {
     log.Fatal(err)
 }
 
-// to get the benefits of immutability, the top-level data structure
-// must be an ArrayList, so each transaction is stored as an item in it
+// the top-level data structure is an ArrayList, so each transaction is
+// stored as an item in it, and past copies of the db stay readable
 history, err := xitdb.NewWriteArrayList(db.RootCursor())
 if err != nil {
     log.Fatal(err)
@@ -219,9 +220,11 @@ A `Database` is initialized with an implementation of the `Core` interface, whic
 
 Every `Core` implements `io.Closer` and owns the file passed to its constructor. Call `Close` on the core rather than on the underlying file so buffered data is flushed before the file is closed.
 
-Usually, you want to use a top-level `ArrayList` like in the example above, because that allows you to store a reference to each copy of the database (which I call a "moment"). This is how it supports transactions, despite not having any rollback journal or write-ahead log. It's an append-only database, so the data you are writing is invisible to any reader until the very last step, when the top-level list's header is updated.
+Since xitdb is an append-only database, the data you are writing is invisible to any reader until the very last step, when a small header at the start of the file is updated to point at it. This is how it supports transactions, despite not having any rollback journal or write-ahead log: if a transaction fails, the data it appended is simply discarded.
 
-You can also use a top-level `HashMap`, which is useful for ephemeral databases where immutability or transaction safety isn't necessary. Since xitdb supports in-memory databases, you could use it as an over-the-wire serialization format. Much like "Cap'n Proto", xitdb has no encoding/decoding step: you just give the buffer to xitdb and it can immediately read from it.
+Usually, you want to use a top-level `ArrayList` like in the example above, because that allows you to store a reference to each copy of the database (which I call a "moment"), so past copies stay readable and can be reverted to. If you don't need to keep past copies, you can also use a top-level `HashMap`. Keep in mind that each write to a top-level `HashMap` is its own transaction, so if you make many writes, group them into one transaction with `RunContext`.
+
+Since xitdb supports in-memory databases, you could use it as an over-the-wire serialization format. Much like "Cap'n Proto", xitdb has no encoding/decoding step: you just give the buffer to xitdb and it can immediately read from it. You can send it over a network and read it with xitdb on the other end.
 
 ## Types
 
@@ -303,7 +306,11 @@ err = history.AppendContext(lastSlot, func(cursor *xitdb.WriteCursor) error {
     if err != nil {
         return err
     }
-    foodCursor.Write(fruits.Slot())
+    fruitsSlot, err := fruits.Slot()
+    if err != nil {
+        return err
+    }
+    foodCursor.Write(fruitsSlot)
 
     food, err := xitdb.NewWriteArrayList(foodCursor)
     if err != nil {
@@ -410,7 +417,11 @@ err = history.AppendContext(lastSlot, func(cursor *xitdb.WriteCursor) error {
     if err != nil {
         return err
     }
-    citiesCursor.Write(bigCities.Slot())
+    bigCitiesSlot, err := bigCities.Slot()
+    if err != nil {
+        return err
+    }
+    citiesCursor.Write(bigCitiesSlot)
 
     cities, err := xitdb.NewWriteArrayList(citiesCursor)
     if err != nil {
@@ -523,7 +534,11 @@ err = history.AppendContext(lastSlot, func(cursor *xitdb.WriteCursor) error {
     if err != nil {
         return err
     }
-    citiesCursor.Write(bigCities.Slot())
+    bigCitiesSlot, err := bigCities.Slot()
+    if err != nil {
+        return err
+    }
+    citiesCursor.Write(bigCitiesSlot)
 
     cities, err := xitdb.NewWriteArrayList(citiesCursor)
     if err != nil {
@@ -1029,7 +1044,7 @@ default:
 Normally, an immutable database grows forever, because old data is never deleted. To reclaim disk space and clear the history, xitdb supports compaction. This involves completely rebuilding the database file to only contain the data accessible from the latest copy (i.e., "moment") of the database.
 
 ```go
-compactFile, err := os.OpenFile("compact.db", os.O_RDWR|os.O_CREATE, 0644)
+compactFile, err := os.OpenFile("compact.db", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 if err != nil {
     log.Fatal(err)
 }
@@ -1053,31 +1068,43 @@ if err != nil {
 fmt.Println(historyCount) // 1
 ```
 
-This compacted database will be in a separate file. If you want to delete the original database and replace it with this one, you'll need to do that yourself. It is not possible to compact a database in-place (using the same file as the target database); doing so would fail and would render your original database unreadable.
+This compacted database will be in a separate file. If you want to delete the original database and replace it with this one, you'll need to do that yourself. The target must be a new or empty database, so compaction returns `ErrTargetNotEmpty` if it already has data, including when it is the original database's own file.
 
-The offsets map records where each copied object lives in the compacted database so shared references and cycles point to the same copied object. The in-memory map grows with the number of live objects copied, so it could theoretically OOM. To avoid this, you can instead use a temporary on-disk xitdb file to track the offsets with [FileOffsetMap](file_offset_map.go):
+The offsets map records where each copied object lives in the compacted database so shared references and cycles point to the same copied object. The in-memory map grows with the number of live objects copied, so it could theoretically OOM. To avoid this, you can instead use a temporary on-disk xitdb file to track the offsets with [FileOffsetMap](file_offset_map.go). Run the compaction inside a single transaction on it, so the offsets aren't each committed separately:
 
 ```go
-// create a scratch file and delete it when compaction is finished
+// create a scratch database and delete it when compaction is finished
 offsetsFile, err := os.CreateTemp("", "compact_offsets_*.db")
 if err != nil {
     panic(err)
 }
 defer os.Remove(offsetsFile.Name())
 
-offsetMap, err := xitdb.NewFileOffsetMap(offsetsFile)
+offsetsCore := xitdb.NewCoreFile(offsetsFile)
+defer offsetsCore.Close()
+offsetsDb, err := xitdb.NewDatabase(offsetsCore, xitdb.Hasher{Hash: sha1.New})
 if err != nil {
     panic(err)
 }
-defer offsetMap.Close()
 
-compactFile, err := os.OpenFile("compact.db", os.O_RDWR|os.O_CREATE, 0644)
+// create the file for the new database
+compactFile, err := os.OpenFile("compact.db", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 if err != nil {
     panic(err)
 }
 compactCore := xitdb.NewCoreBufferedFile(compactFile)
 defer compactCore.Close()
-compactDb, err := db.Compact(compactCore, offsetMap)
+
+// compact inside a transaction on the scratch database
+var compactDb *xitdb.Database
+err = offsetsDb.RunContext(func(cursor *xitdb.WriteCursor) error {
+    offsetMap, err := xitdb.NewFileOffsetMap(cursor)
+    if err != nil {
+        return err
+    }
+    compactDb, err = db.Compact(compactCore, offsetMap)
+    return err
+})
 if err != nil {
     panic(err)
 }
@@ -1093,6 +1120,49 @@ if err != nil {
 }
 fmt.Println(historyCount) // 1
 ```
+
+## Replication
+
+Since xitdb files are append-only, it is absurdly easy to replicate them: just copy the bytes that the destination doesn't have yet! Other databases like SQLite require complex external tools to replicate. In xitdb, once a transaction is committed, its bytes never change, except for a small header that points at the latest commit. That makes it easy to keep a copy of a database (a "replica") up to date, whether it's another file on the same machine or on another machine across a network.
+
+A sync takes four steps:
+
+```go
+// on the replica: describe what it already has
+state, err := replica.ReplicaState()
+if err != nil {
+    log.Fatal(err)
+}
+
+// on the source: decide which bytes to send
+start, err := source.ReplicationStart(state)
+if err != nil {
+    log.Fatal(err)
+}
+end, err := source.CommittedSize()
+if err != nil {
+    log.Fatal(err)
+}
+
+// on the source: write those bytes
+var buffer bytes.Buffer
+if err := source.ReadCommitted(start, end, &buffer); err != nil {
+    log.Fatal(err)
+}
+
+// on the replica: apply them
+if err := replica.ApplyReplicated(start, &buffer, end-start); err != nil {
+    log.Fatal(err)
+}
+```
+
+Over a network, the replica sends its `ReplicaState` (two integers: its committed size and a checksum of its latest commit), and the source replies with `start`, the length, and then the bytes. Since `ReadCommitted` takes an `io.Writer` and `ApplyReplicated` takes an `io.Reader`, the bytes can be streamed directly over the connection without buffering them in memory.
+
+A replica can start out as any new database. Each database has a random file ID, so the first sync sees that the replica isn't a copy of the source and sends the entire source file, replacing the replica. The same happens if the replica can no longer be extended, such as when the source is replaced by a compacted copy (which is a new file) or restored from an older backup: `ReplicationStart` returns 0, and the replica is replaced with a full copy.
+
+If a sync is interrupted, such as by a dropped connection, the replica stays at its last commit, and the next sync discards whatever was partially written. The exception is when `start` is 0: the replica is truncated before the copy begins, so an interrupted copy leaves it unusable until the next sync succeeds. If that matters to you, check whether `start` is 0, and if so, write the copy to a new file and only replace the old replica after `ApplyReplicated` succeeds.
+
+Only change a replica with `ApplyReplicated`. If you write to it directly, it no longer matches the source, and the next sync will replace it.
 
 ## Thread Safety
 

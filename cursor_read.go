@@ -13,12 +13,53 @@ type ReadCursor struct {
 	DB      *Database
 }
 
-func (c *ReadCursor) Slot() Slot {
-	return c.SlotPtr.Slot
+// Slot returns the slot this cursor points to. for a streaming root
+// cursor, it reads the root again (see resolved).
+func (c *ReadCursor) Slot() (Slot, error) {
+	slotPtr, err := c.resolved()
+	if err != nil {
+		return Slot{}, err
+	}
+	return slotPtr.Slot, nil
+}
+
+// a streaming root cursor only has a snapshot of the root slot,
+// which goes stale after the next transaction, so read it again.
+// the result points at the copy of the root slot in the newest
+// trailer, not the root header, so it is a fixed snapshot: the
+// trailer never changes, so everything read through it comes from
+// one commit, even if more are made.
+// every method that reads SlotPtr must go through this.
+func (c *ReadCursor) resolved() (SlotPointer, error) {
+	if c.DB.Header.Streaming() && c.DB.isRoot(c.SlotPtr) {
+		header, err := c.DB.readRootHeader()
+		if err != nil {
+			return SlotPointer{}, err
+		}
+		if header.FileSize < RootTrailerLength {
+			return SlotPointer{}, ErrInvalidDatabase
+		}
+		// the root slot is the first thing in the trailer
+		position := header.FileSize - RootTrailerLength
+		return SlotPointer{Position: &position, Slot: header.Root}, nil
+	}
+	return c.SlotPtr, nil
+}
+
+func (c *ReadCursor) resolvedCursor() (*ReadCursor, error) {
+	slotPtr, err := c.resolved()
+	if err != nil {
+		return nil, err
+	}
+	return &ReadCursor{SlotPtr: slotPtr, DB: c.DB}, nil
 }
 
 func (c *ReadCursor) ReadPath(path []PathPart) (*ReadCursor, error) {
-	slotPtr, err := c.DB.readSlotPointer(ReadOnly, path, 0, c.SlotPtr)
+	start, err := c.resolved()
+	if err != nil {
+		return nil, err
+	}
+	slotPtr, err := c.DB.readSlotPointer(ReadOnly, path, 0, start)
 	if err != nil {
 		if errors.Is(err, ErrKeyNotFound) {
 			return nil, nil
@@ -29,7 +70,11 @@ func (c *ReadCursor) ReadPath(path []PathPart) (*ReadCursor, error) {
 }
 
 func (c *ReadCursor) ReadPathSlot(path []PathPart) (Slot, error) {
-	slotPtr, err := c.DB.readSlotPointer(ReadOnly, path, 0, c.SlotPtr)
+	start, err := c.resolved()
+	if err != nil {
+		return Slot{}, err
+	}
+	slotPtr, err := c.DB.readSlotPointer(ReadOnly, path, 0, start)
 	if err != nil {
 		if errors.Is(err, ErrKeyNotFound) {
 			return Slot{}, nil
@@ -40,28 +85,40 @@ func (c *ReadCursor) ReadPathSlot(path []PathPart) (Slot, error) {
 }
 
 func (c *ReadCursor) ReadUint() (uint64, error) {
-	if c.SlotPtr.Slot.Tag != TagUint {
+	slotPtr, err := c.resolved()
+	if err != nil {
+		return 0, err
+	}
+	if slotPtr.Slot.Tag != TagUint {
 		return 0, ErrUnexpectedTag
 	}
-	if c.SlotPtr.Slot.Value < 0 {
+	if slotPtr.Slot.Value < 0 {
 		return 0, ErrExpectedUnsignedLong
 	}
-	return uint64(c.SlotPtr.Slot.Value), nil
+	return uint64(slotPtr.Slot.Value), nil
 }
 
 func (c *ReadCursor) ReadInt() (int64, error) {
-	if c.SlotPtr.Slot.Tag != TagInt {
+	slotPtr, err := c.resolved()
+	if err != nil {
+		return 0, err
+	}
+	if slotPtr.Slot.Tag != TagInt {
 		return 0, ErrUnexpectedTag
 	}
-	return c.SlotPtr.Slot.Value, nil
+	return slotPtr.Slot.Value, nil
 }
 
 func (c *ReadCursor) ReadFloat() (float64, error) {
-	if c.SlotPtr.Slot.Tag != TagFloat {
+	slotPtr, err := c.resolved()
+	if err != nil {
+		return 0, err
+	}
+	if slotPtr.Slot.Tag != TagFloat {
 		return 0, ErrUnexpectedTag
 	}
 	var buf [8]byte
-	binary.BigEndian.PutUint64(buf[:], uint64(c.SlotPtr.Slot.Value))
+	binary.BigEndian.PutUint64(buf[:], uint64(slotPtr.Slot.Value))
 	return math.Float64frombits(binary.BigEndian.Uint64(buf[:])), nil
 }
 
@@ -74,11 +131,15 @@ func (c *ReadCursor) ReadBytes(maxSize int64) ([]byte, error) {
 }
 
 func (c *ReadCursor) ReadBytesObject(maxSize int64) (Bytes, error) {
-	switch c.SlotPtr.Slot.Tag {
+	slotPtr, err := c.resolved()
+	if err != nil {
+		return Bytes{}, err
+	}
+	switch slotPtr.Slot.Tag {
 	case TagNone:
 		return Bytes{Value: []byte{}}, nil
 	case TagBytes:
-		if err := c.DB.Core.SeekTo(c.SlotPtr.Slot.Value); err != nil {
+		if err := c.DB.Core.SeekTo(slotPtr.Slot.Value); err != nil {
 			return Bytes{}, err
 		}
 		valueSize, err := readLong(c.DB.Core)
@@ -97,7 +158,7 @@ func (c *ReadCursor) ReadBytesObject(maxSize int64) (Bytes, error) {
 			return Bytes{}, err
 		}
 		var formatTag []byte
-		if c.SlotPtr.Slot.Full {
+		if slotPtr.Slot.Full {
 			if err := c.DB.Core.SeekTo(startPosition + valueSize); err != nil {
 				return Bytes{}, err
 			}
@@ -109,10 +170,10 @@ func (c *ReadCursor) ReadBytesObject(maxSize int64) (Bytes, error) {
 		return Bytes{Value: value, FormatTag: formatTag}, nil
 	case TagShortBytes:
 		var buf [8]byte
-		binary.BigEndian.PutUint64(buf[:], uint64(c.SlotPtr.Slot.Value))
+		binary.BigEndian.PutUint64(buf[:], uint64(slotPtr.Slot.Value))
 
 		var totalSize int64 = 8
-		if c.SlotPtr.Slot.Full {
+		if slotPtr.Slot.Full {
 			totalSize = 6
 		}
 
@@ -129,7 +190,7 @@ func (c *ReadCursor) ReadBytesObject(maxSize int64) (Bytes, error) {
 		}
 
 		var formatTag []byte
-		if c.SlotPtr.Slot.Full {
+		if slotPtr.Slot.Full {
 			formatTag = make([]byte, 2)
 			copy(formatTag, buf[totalSize:totalSize+2])
 		}
@@ -151,21 +212,15 @@ type ReadKVPairCursor struct {
 }
 
 func (c *ReadCursor) ReadKeyValuePair() (*ReadKVPairCursor, error) {
-	if c.SlotPtr.Slot.Tag != TagKVPair {
-		return nil, ErrUnexpectedTag
-	}
-
-	if err := c.DB.Core.SeekTo(c.SlotPtr.Slot.Value); err != nil {
+	slotPtr, err := c.resolved()
+	if err != nil {
 		return nil, err
 	}
-	kvPairBytes := make([]byte, KeyValuePairLength(int(c.DB.Header.HashSize)))
-	if err := c.DB.Core.Read(kvPairBytes); err != nil {
+	kvPair, err := c.DB.readKvPair(slotPtr.Slot)
+	if err != nil {
 		return nil, err
 	}
-	kvPair := KeyValuePairFromBytes(kvPairBytes, int(c.DB.Header.HashSize))
-
-	hashPos := c.SlotPtr.Slot.Value
-	keySlotPos := hashPos + int64(c.DB.Header.HashSize)
+	keySlotPos := slotPtr.Slot.Value + c.DB.kvKeyOffset(slotPtr.Slot.Tag)
 	valueSlotPos := keySlotPos + int64(SlotLength)
 
 	return &ReadKVPairCursor{
@@ -185,9 +240,13 @@ type CursorReader struct {
 }
 
 func (c *ReadCursor) Reader() (*CursorReader, error) {
-	switch c.SlotPtr.Slot.Tag {
+	slotPtr, err := c.resolved()
+	if err != nil {
+		return nil, err
+	}
+	switch slotPtr.Slot.Tag {
 	case TagBytes:
-		if err := c.DB.Core.SeekTo(c.SlotPtr.Slot.Value); err != nil {
+		if err := c.DB.Core.SeekTo(slotPtr.Slot.Value); err != nil {
 			return nil, err
 		}
 		size, err := readLong(c.DB.Core)
@@ -201,10 +260,10 @@ func (c *ReadCursor) Reader() (*CursorReader, error) {
 		return &CursorReader{parent: c, size: size, startPosition: startPosition, relativePosition: 0}, nil
 	case TagShortBytes:
 		var buf [8]byte
-		binary.BigEndian.PutUint64(buf[:], uint64(c.SlotPtr.Slot.Value))
+		binary.BigEndian.PutUint64(buf[:], uint64(slotPtr.Slot.Value))
 
 		totalSize := 8
-		if c.SlotPtr.Slot.Full {
+		if slotPtr.Slot.Full {
 			totalSize = 6
 		}
 
@@ -216,7 +275,7 @@ func (c *ReadCursor) Reader() (*CursorReader, error) {
 			valueSize++
 		}
 
-		startPosition := *c.SlotPtr.Position + 1
+		startPosition := *slotPtr.Position + 1
 		return &CursorReader{parent: c, size: int64(valueSize), startPosition: startPosition, relativePosition: 0}, nil
 	default:
 		return nil, ErrUnexpectedTag
@@ -307,11 +366,15 @@ func (r *CursorReader) ReadAll() ([]byte, error) {
 // Count
 
 func (c *ReadCursor) Count() (int64, error) {
-	switch c.SlotPtr.Slot.Tag {
+	slotPtr, err := c.resolved()
+	if err != nil {
+		return 0, err
+	}
+	switch slotPtr.Slot.Tag {
 	case TagNone:
 		return 0, nil
 	case TagArrayList:
-		if err := c.DB.Core.SeekTo(c.SlotPtr.Slot.Value); err != nil {
+		if err := c.DB.Core.SeekTo(slotPtr.Slot.Value); err != nil {
 			return 0, err
 		}
 		var headerBytes [ArrayListHeaderLength]byte
@@ -324,7 +387,7 @@ func (c *ReadCursor) Count() (int64, error) {
 		}
 		return header.Size, nil
 	case TagLinkedArrayList, TagSortedMap, TagSortedSet:
-		if err := c.DB.Core.SeekTo(c.SlotPtr.Slot.Value); err != nil {
+		if err := c.DB.Core.SeekTo(slotPtr.Slot.Value); err != nil {
 			return 0, err
 		}
 		var headerBytes [BTreeHeaderLength]byte
@@ -337,16 +400,16 @@ func (c *ReadCursor) Count() (int64, error) {
 		}
 		return header.Size, nil
 	case TagBytes:
-		if err := c.DB.Core.SeekTo(c.SlotPtr.Slot.Value); err != nil {
+		if err := c.DB.Core.SeekTo(slotPtr.Slot.Value); err != nil {
 			return 0, err
 		}
 		return readLong(c.DB.Core)
 	case TagShortBytes:
 		var buf [8]byte
-		binary.BigEndian.PutUint64(buf[:], uint64(c.SlotPtr.Slot.Value))
+		binary.BigEndian.PutUint64(buf[:], uint64(slotPtr.Slot.Value))
 
 		totalSize := 8
-		if c.SlotPtr.Slot.Full {
+		if slotPtr.Slot.Full {
 			totalSize = 6
 		}
 
@@ -359,7 +422,7 @@ func (c *ReadCursor) Count() (int64, error) {
 		}
 		return int64(size), nil
 	case TagCountedHashMap, TagCountedHashSet:
-		if err := c.DB.Core.SeekTo(c.SlotPtr.Slot.Value); err != nil {
+		if err := c.DB.Core.SeekTo(slotPtr.Slot.Value); err != nil {
 			return 0, err
 		}
 		return readLong(c.DB.Core)
@@ -384,7 +447,11 @@ type CursorIterator struct {
 	nextCursorMaybe *ReadCursor // only used when iterating over hash maps
 }
 
-func newCursorIterator(cursor *ReadCursor) (*CursorIterator, error) {
+func newCursorIterator(unresolvedCursor *ReadCursor) (*CursorIterator, error) {
+	cursor, err := unresolvedCursor.resolvedCursor()
+	if err != nil {
+		return nil, err
+	}
 	it := &CursorIterator{cursor: cursor}
 
 	switch cursor.SlotPtr.Slot.Tag {
@@ -538,7 +605,7 @@ func (c *ReadCursor) All() iter.Seq2[*ReadCursor, error] {
 			return
 		}
 
-		switch c.SlotPtr.Slot.Tag {
+		switch it.cursor.SlotPtr.Slot.Tag {
 		case TagNone:
 			return
 		case TagArrayList:
@@ -741,7 +808,11 @@ func sortedStackFromKey(cursor *ReadCursor, rootPtr int64, key []byte) ([]iterLe
 
 // start a sorted-map iterator at the entry with rank startIndex (the count descent),
 // iterating in key order from there. negative indexes count from the end.
-func newSortedIterFromIndex(cursor *ReadCursor, startIndex int64) (*CursorIterator, error) {
+func newSortedIterFromIndex(unresolvedCursor *ReadCursor, startIndex int64) (*CursorIterator, error) {
+	cursor, err := unresolvedCursor.resolvedCursor()
+	if err != nil {
+		return nil, err
+	}
 	it := &CursorIterator{cursor: cursor}
 	switch cursor.SlotPtr.Slot.Tag {
 	case TagNone:
@@ -790,7 +861,11 @@ func resolveStartIndex(index int64, size int64) (int64, bool) {
 // start an array-list iterator at startIndex, descending the radix trie straight
 // to that index. negatives count from the end; out of range (or an unwritten
 // list) yields nothing.
-func newArrayListIterFromIndex(cursor *ReadCursor, startIndex int64) (*CursorIterator, error) {
+func newArrayListIterFromIndex(unresolvedCursor *ReadCursor, startIndex int64) (*CursorIterator, error) {
+	cursor, err := unresolvedCursor.resolvedCursor()
+	if err != nil {
+		return nil, err
+	}
 	it := &CursorIterator{cursor: cursor}
 	switch cursor.SlotPtr.Slot.Tag {
 	case TagNone:
@@ -832,7 +907,11 @@ func newArrayListIterFromIndex(cursor *ReadCursor, startIndex int64) (*CursorIte
 
 // start a linked-array-list iterator at startIndex, descending the
 // count-augmented b-tree straight to that index. negatives count from the end.
-func newLinkedArrayListIterFromIndex(cursor *ReadCursor, startIndex int64) (*CursorIterator, error) {
+func newLinkedArrayListIterFromIndex(unresolvedCursor *ReadCursor, startIndex int64) (*CursorIterator, error) {
+	cursor, err := unresolvedCursor.resolvedCursor()
+	if err != nil {
+		return nil, err
+	}
 	it := &CursorIterator{cursor: cursor}
 	switch cursor.SlotPtr.Slot.Tag {
 	case TagNone:
@@ -868,7 +947,11 @@ func newLinkedArrayListIterFromIndex(cursor *ReadCursor, startIndex int64) (*Cur
 }
 
 // start a sorted-map iterator at the first entry with key >= startKey
-func newSortedIterFromKey(cursor *ReadCursor, startKey []byte) (*CursorIterator, error) {
+func newSortedIterFromKey(unresolvedCursor *ReadCursor, startKey []byte) (*CursorIterator, error) {
+	cursor, err := unresolvedCursor.resolvedCursor()
+	if err != nil {
+		return nil, err
+	}
 	it := &CursorIterator{cursor: cursor}
 	switch cursor.SlotPtr.Slot.Tag {
 	case TagNone:

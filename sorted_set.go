@@ -12,7 +12,11 @@ type ReadSortedSet struct {
 }
 
 func NewReadSortedSet(cursor *ReadCursor) (*ReadSortedSet, error) {
-	switch cursor.SlotPtr.Slot.Tag {
+	slotPtr, err := cursor.resolved()
+	if err != nil {
+		return nil, err
+	}
+	switch slotPtr.Slot.Tag {
 	case TagNone, TagSortedMap, TagSortedSet:
 		return &ReadSortedSet{Cursor: cursor}, nil
 	default:
@@ -20,7 +24,7 @@ func NewReadSortedSet(cursor *ReadCursor) (*ReadSortedSet, error) {
 	}
 }
 
-func (s *ReadSortedSet) Slot() Slot {
+func (s *ReadSortedSet) Slot() (Slot, error) {
 	return s.Cursor.Slot()
 }
 
@@ -76,10 +80,14 @@ func (s *ReadSortedSet) Rank(key string) (int64, error) {
 
 // RankByBytes returns the number of keys strictly less than key
 func (s *ReadSortedSet) RankByBytes(key []byte) (int64, error) {
-	if s.Cursor.SlotPtr.Slot.Tag == TagNone {
+	slotPtr, err := s.Cursor.resolved()
+	if err != nil {
+		return 0, err
+	}
+	if slotPtr.Slot.Tag == TagNone {
 		return 0, nil
 	}
-	if err := s.Cursor.DB.Core.SeekTo(s.Cursor.SlotPtr.Slot.Value); err != nil {
+	if err := s.Cursor.DB.Core.SeekTo(slotPtr.Slot.Value); err != nil {
 		return 0, err
 	}
 	var headerBytes [BTreeHeaderLength]byte

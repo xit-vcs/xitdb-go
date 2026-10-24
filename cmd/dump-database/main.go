@@ -114,7 +114,7 @@ func toJsonValue(cursor *xitdb.ReadCursor, isRoot bool) (any, error) {
 		}
 		return result, nil
 
-	case xitdb.TagHashMap, xitdb.TagCountedHashMap:
+	case xitdb.TagHashMap, xitdb.TagCountedHashMap, xitdb.TagSortedMap:
 		result := make(map[string]any)
 		for c, err := range cursor.All() {
 			if err != nil {
@@ -136,7 +136,7 @@ func toJsonValue(cursor *xitdb.ReadCursor, isRoot bool) (any, error) {
 		}
 		return result, nil
 
-	case xitdb.TagHashSet, xitdb.TagCountedHashSet:
+	case xitdb.TagHashSet, xitdb.TagCountedHashSet, xitdb.TagSortedSet:
 		var result []any
 		for c, err := range cursor.All() {
 			if err != nil {
@@ -226,7 +226,7 @@ func printValue(cursor *xitdb.ReadCursor, indent string) error {
 			}
 		}
 
-	case xitdb.TagHashMap, xitdb.TagCountedHashMap:
+	case xitdb.TagHashMap, xitdb.TagCountedHashMap, xitdb.TagSortedMap:
 		type entry struct {
 			key         string
 			valueCursor *xitdb.ReadCursor
@@ -247,8 +247,11 @@ func printValue(cursor *xitdb.ReadCursor, indent string) error {
 			entries = append(entries, entry{key, kvPair.ValueCursor})
 		}
 		prefix := "HashMap"
-		if cursor.SlotPtr.Slot.Tag == xitdb.TagCountedHashMap {
+		switch cursor.SlotPtr.Slot.Tag {
+		case xitdb.TagCountedHashMap:
 			prefix = "CountedHashMap"
+		case xitdb.TagSortedMap:
+			prefix = "SortedMap"
 		}
 		fmt.Printf("%s%s{%d}:\n", indent, prefix, len(entries))
 		for _, e := range entries {
@@ -258,7 +261,7 @@ func printValue(cursor *xitdb.ReadCursor, indent string) error {
 			}
 		}
 
-	case xitdb.TagHashSet, xitdb.TagCountedHashSet:
+	case xitdb.TagHashSet, xitdb.TagCountedHashSet, xitdb.TagSortedSet:
 		var keys []string
 		for c, err := range cursor.All() {
 			if err != nil {
@@ -275,8 +278,11 @@ func printValue(cursor *xitdb.ReadCursor, indent string) error {
 			keys = append(keys, key)
 		}
 		prefix := "HashSet"
-		if cursor.SlotPtr.Slot.Tag == xitdb.TagCountedHashSet {
+		switch cursor.SlotPtr.Slot.Tag {
+		case xitdb.TagCountedHashSet:
 			prefix = "CountedHashSet"
+		case xitdb.TagSortedSet:
+			prefix = "SortedSet"
 		}
 		fmt.Printf("%s%s{%d}: [%s]\n", indent, prefix, len(keys), strings.Join(keys, ", "))
 

@@ -7,7 +7,11 @@ type ReadCountedHashSet struct {
 }
 
 func NewReadCountedHashSet(cursor *ReadCursor) (*ReadCountedHashSet, error) {
-	switch cursor.SlotPtr.Slot.Tag {
+	slotPtr, err := cursor.resolved()
+	if err != nil {
+		return nil, err
+	}
+	switch slotPtr.Slot.Tag {
 	case TagNone, TagCountedHashMap, TagCountedHashSet:
 		return &ReadCountedHashSet{ReadHashSet: &ReadHashSet{Cursor: cursor}}, nil
 	default:
@@ -26,7 +30,11 @@ type WriteCountedHashSet struct {
 }
 
 func NewWriteCountedHashSet(cursor *WriteCursor) (*WriteCountedHashSet, error) {
-	switch cursor.SlotPtr.Slot.Tag {
+	slotPtr, err := cursor.resolved()
+	if err != nil {
+		return nil, err
+	}
+	switch slotPtr.Slot.Tag {
 	case TagNone, TagCountedHashMap, TagCountedHashSet:
 	default:
 		return nil, ErrUnexpectedTag

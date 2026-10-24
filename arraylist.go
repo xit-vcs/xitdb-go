@@ -9,7 +9,11 @@ type ReadArrayList struct {
 }
 
 func NewReadArrayList(cursor *ReadCursor) (*ReadArrayList, error) {
-	switch cursor.SlotPtr.Slot.Tag {
+	slotPtr, err := cursor.resolved()
+	if err != nil {
+		return nil, err
+	}
+	switch slotPtr.Slot.Tag {
 	case TagNone, TagArrayList:
 		return &ReadArrayList{Cursor: cursor}, nil
 	default:
@@ -17,7 +21,7 @@ func NewReadArrayList(cursor *ReadCursor) (*ReadArrayList, error) {
 	}
 }
 
-func (a *ReadArrayList) Slot() Slot {
+func (a *ReadArrayList) Slot() (Slot, error) {
 	return a.Cursor.Slot()
 }
 

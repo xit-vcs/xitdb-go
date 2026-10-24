@@ -12,7 +12,11 @@ type ReadHashMap struct {
 }
 
 func NewReadHashMap(cursor *ReadCursor) (*ReadHashMap, error) {
-	switch cursor.SlotPtr.Slot.Tag {
+	slotPtr, err := cursor.resolved()
+	if err != nil {
+		return nil, err
+	}
+	switch slotPtr.Slot.Tag {
 	case TagNone, TagHashMap, TagHashSet:
 		return &ReadHashMap{Cursor: cursor}, nil
 	default:
@@ -20,7 +24,7 @@ func NewReadHashMap(cursor *ReadCursor) (*ReadHashMap, error) {
 	}
 }
 
-func (m *ReadHashMap) Slot() Slot {
+func (m *ReadHashMap) Slot() (Slot, error) {
 	return m.Cursor.Slot()
 }
 
@@ -134,10 +138,7 @@ func NewWriteHashMap(cursor *WriteCursor) (*WriteHashMap, error) {
 
 func (m *WriteHashMap) Put(key string, data WriteableData) error {
 	hash := m.Cursor.DB.digest([]byte(key))
-	if err := m.PutKeyByHash(hash, NewString(key)); err != nil {
-		return err
-	}
-	return m.PutByHash(hash, data)
+	return m.putKeyAndValue(hash, NewString(key), data)
 }
 
 func (m *WriteHashMap) PutCursor(key string) (*WriteCursor, error) {
@@ -167,10 +168,7 @@ func (m *WriteHashMap) Remove(key string) (bool, error) {
 
 func (m *WriteHashMap) PutBytes(key Bytes, data WriteableData) error {
 	hash := m.Cursor.DB.digest(key.Value)
-	if err := m.PutKeyByHash(hash, key); err != nil {
-		return err
-	}
-	return m.PutByHash(hash, data)
+	return m.putKeyAndValue(hash, key, data)
 }
 
 func (m *WriteHashMap) PutCursorByBytes(key Bytes) (*WriteCursor, error) {
@@ -213,13 +211,36 @@ func (m *WriteHashMap) PutCursorByHash(hash []byte) (*WriteCursor, error) {
 }
 
 func (m *WriteHashMap) PutKeyByHash(hash []byte, data WriteableData) error {
-	cursor, err := m.writeCursor.WritePath([]PathPart{
+	// the key is written in the same write as the lookup, so in streaming
+	// mode, a root map does both in one transaction
+	_, err := m.writeCursor.WritePath([]PathPart{
 		HashMapGetPart{Target: HashMapGetKey{Hash: hash}},
+		Context{Function: func(cursor *WriteCursor) error {
+			// keys are only written if empty, because their value should always
+			// be the same at a given hash.
+			return cursor.WriteIfEmpty(data)
+		}},
 	})
-	if err != nil {
-		return err
-	}
-	return cursor.WriteIfEmpty(data)
+	return err
+}
+
+// writes the key (if it's empty) and the value in one write, so in
+// streaming mode, a root map does it in one transaction
+func (m *WriteHashMap) putKeyAndValue(hash []byte, key WriteableData, data WriteableData) error {
+	_, err := m.writeCursor.WritePath([]PathPart{
+		HashMapGetPart{Target: HashMapGetKVPair{Hash: hash}},
+		Context{Function: func(cursor *WriteCursor) error {
+			kvPair, err := cursor.ReadKeyValuePair()
+			if err != nil {
+				return err
+			}
+			if err := kvPair.KeyCursor.WriteIfEmpty(key); err != nil {
+				return err
+			}
+			return kvPair.ValueCursor.Write(data)
+		}},
+	})
+	return err
 }
 
 func (m *WriteHashMap) PutKeyCursorByHash(hash []byte) (*WriteCursor, error) {

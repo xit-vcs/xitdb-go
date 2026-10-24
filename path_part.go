@@ -86,46 +86,47 @@ func (p ArrayListInit) readSlotPointer(db *Database, isTopLevel bool, writeMode 
 	case TagArrayList:
 		arrayListStart := slotPtr.Slot.Value
 
-		if db.TxStart != nil {
-			if arrayListStart < *db.TxStart {
-				if err := db.Core.SeekTo(arrayListStart); err != nil {
-					return SlotPointer{}, err
-				}
-				var headerBytes [ArrayListHeaderLength]byte
-				if err := db.Core.Read(headerBytes[:]); err != nil {
-					return SlotPointer{}, err
-				}
-				header, err := ArrayListHeaderFromBytes(headerBytes[:])
-				if err != nil {
-					return SlotPointer{}, err
-				}
-				if err := db.Core.SeekTo(header.Ptr); err != nil {
-					return SlotPointer{}, err
-				}
-				arrayListIndexBlock := make([]byte, IndexBlockSize)
-				if err := db.Core.Read(arrayListIndexBlock); err != nil {
-					return SlotPointer{}, err
-				}
-				newStart, err := db.Core.Length()
-				if err != nil {
-					return SlotPointer{}, err
-				}
-				if err := db.Core.SeekTo(newStart); err != nil {
-					return SlotPointer{}, err
-				}
-				nextArrayListPtr := newStart + int64(ArrayListHeaderLength)
-				header = header.WithPtr(nextArrayListPtr)
-				hb := header.ToBytes()
-				if err := db.Core.Write(hb[:]); err != nil {
-					return SlotPointer{}, err
-				}
-				if err := db.Core.Write(arrayListIndexBlock); err != nil {
-					return SlotPointer{}, err
-				}
-				arrayListStart = newStart
+		// copy it to the end unless it was made in this transaction
+		old, err := db.isOld(arrayListStart)
+		if err != nil {
+			return SlotPointer{}, err
+		}
+		if old {
+			if err := db.Core.SeekTo(arrayListStart); err != nil {
+				return SlotPointer{}, err
 			}
-		} else if db.Header.Tag == TagArrayList {
-			return SlotPointer{}, ErrExpectedTxStart
+			var headerBytes [ArrayListHeaderLength]byte
+			if err := db.Core.Read(headerBytes[:]); err != nil {
+				return SlotPointer{}, err
+			}
+			header, err := ArrayListHeaderFromBytes(headerBytes[:])
+			if err != nil {
+				return SlotPointer{}, err
+			}
+			if err := db.Core.SeekTo(header.Ptr); err != nil {
+				return SlotPointer{}, err
+			}
+			arrayListIndexBlock := make([]byte, IndexBlockSize)
+			if err := db.Core.Read(arrayListIndexBlock); err != nil {
+				return SlotPointer{}, err
+			}
+			newStart, err := db.Core.Length()
+			if err != nil {
+				return SlotPointer{}, err
+			}
+			if err := db.Core.SeekTo(newStart); err != nil {
+				return SlotPointer{}, err
+			}
+			nextArrayListPtr := newStart + int64(ArrayListHeaderLength)
+			header = header.WithPtr(nextArrayListPtr)
+			hb := header.ToBytes()
+			if err := db.Core.Write(hb[:]); err != nil {
+				return SlotPointer{}, err
+			}
+			if err := db.Core.Write(arrayListIndexBlock); err != nil {
+				return SlotPointer{}, err
+			}
+			arrayListStart = newStart
 		}
 
 		nextSlotPtr := SlotPointer{Position: &position, Slot: Slot{Value: arrayListStart, Tag: TagArrayList}}
@@ -260,7 +261,10 @@ func (p ArrayListAppend) readSlotPointer(db *Database, isTopLevel bool, writeMod
 			return SlotPointer{}, err
 		}
 	}
-	if isTopLevel && db.transaction != nil {
+	// the appended moment becomes the transaction's root, so it stays writable
+	// after freezing. in streaming mode, the top-level history is the list
+	// held by the copy of the root slot.
+	if db.transaction != nil && (isTopLevel || db.transaction.isScratchPosition(slotPtr.Position)) {
 		db.transaction.rootPosition = appendResult.SlotPtr.Position
 	}
 	finalSlotPtr, err := db.readSlotPointer(writeMode, path, pathI+1, appendResult.SlotPtr)
@@ -412,29 +416,29 @@ func (p LinkedArrayListInit) readSlotPointer(db *Database, isTopLevel bool, writ
 		// copy the header into this transaction unless it was made in it, so past
 		// moments still pointing at the old header are unaffected. b-tree nodes are
 		// always appended, so only the header needs copying.
-		if db.TxStart != nil {
-			if headerPtr < *db.TxStart {
-				if err := db.Core.SeekTo(headerPtr); err != nil {
-					return SlotPointer{}, err
-				}
-				var headerBytes [BTreeHeaderLength]byte
-				if err := db.Core.Read(headerBytes[:]); err != nil {
-					return SlotPointer{}, err
-				}
-				newPtr, err := db.Core.Length()
-				if err != nil {
-					return SlotPointer{}, err
-				}
-				if err := db.Core.SeekTo(newPtr); err != nil {
-					return SlotPointer{}, err
-				}
-				if err := db.Core.Write(headerBytes[:]); err != nil {
-					return SlotPointer{}, err
-				}
-				headerPtr = newPtr
+		old, err := db.isOld(headerPtr)
+		if err != nil {
+			return SlotPointer{}, err
+		}
+		if old {
+			if err := db.Core.SeekTo(headerPtr); err != nil {
+				return SlotPointer{}, err
 			}
-		} else if db.Header.Tag == TagArrayList {
-			return SlotPointer{}, ErrExpectedTxStart
+			var headerBytes [BTreeHeaderLength]byte
+			if err := db.Core.Read(headerBytes[:]); err != nil {
+				return SlotPointer{}, err
+			}
+			newPtr, err := db.Core.Length()
+			if err != nil {
+				return SlotPointer{}, err
+			}
+			if err := db.Core.SeekTo(newPtr); err != nil {
+				return SlotPointer{}, err
+			}
+			if err := db.Core.Write(headerBytes[:]); err != nil {
+				return SlotPointer{}, err
+			}
+			headerPtr = newPtr
 		}
 		nextSlotPtr := SlotPointer{Position: &position, Slot: Slot{Value: headerPtr, Tag: TagLinkedArrayList}}
 		if err := db.Core.SeekTo(position); err != nil {
@@ -966,42 +970,43 @@ func (p HashMapInitPart) readSlotPointer(db *Database, isTopLevel bool, writeMod
 
 		mapStart := slotPtr.Slot.Value
 
-		if db.TxStart != nil {
-			if mapStart < *db.TxStart {
-				if err := db.Core.SeekTo(mapStart); err != nil {
-					return SlotPointer{}, err
-				}
-				var mapCountMaybe *int64
-				if p.Counted {
-					v, err := readLong(db.Core)
-					if err != nil {
-						return SlotPointer{}, err
-					}
-					mapCountMaybe = &v
-				}
-				mapIndexBlock := make([]byte, IndexBlockSize)
-				if err := db.Core.Read(mapIndexBlock); err != nil {
-					return SlotPointer{}, err
-				}
-				newStart, err := db.Core.Length()
+		// copy it to the end unless it was made in this transaction
+		old, err := db.isOld(mapStart)
+		if err != nil {
+			return SlotPointer{}, err
+		}
+		if old {
+			if err := db.Core.SeekTo(mapStart); err != nil {
+				return SlotPointer{}, err
+			}
+			var mapCountMaybe *int64
+			if p.Counted {
+				v, err := readLong(db.Core)
 				if err != nil {
 					return SlotPointer{}, err
 				}
-				if err := db.Core.SeekTo(newStart); err != nil {
-					return SlotPointer{}, err
-				}
-				if mapCountMaybe != nil {
-					if err := writeLong(db.Core, *mapCountMaybe); err != nil {
-						return SlotPointer{}, err
-					}
-				}
-				if err := db.Core.Write(mapIndexBlock); err != nil {
-					return SlotPointer{}, err
-				}
-				mapStart = newStart
+				mapCountMaybe = &v
 			}
-		} else if db.Header.Tag == TagArrayList {
-			return SlotPointer{}, ErrExpectedTxStart
+			mapIndexBlock := make([]byte, IndexBlockSize)
+			if err := db.Core.Read(mapIndexBlock); err != nil {
+				return SlotPointer{}, err
+			}
+			newStart, err := db.Core.Length()
+			if err != nil {
+				return SlotPointer{}, err
+			}
+			if err := db.Core.SeekTo(newStart); err != nil {
+				return SlotPointer{}, err
+			}
+			if mapCountMaybe != nil {
+				if err := writeLong(db.Core, *mapCountMaybe); err != nil {
+					return SlotPointer{}, err
+				}
+			}
+			if err := db.Core.Write(mapIndexBlock); err != nil {
+				return SlotPointer{}, err
+			}
+			mapStart = newStart
 		}
 
 		nextSlotPtr := SlotPointer{Position: &position, Slot: Slot{Value: mapStart, Tag: tag}}
@@ -1207,29 +1212,29 @@ func (p SortedMapInitPart) readSlotPointer(db *Database, isTopLevel bool, writeM
 		}
 		headerPtr := slotPtr.Slot.Value
 		// copy the header into this transaction unless it was made in it
-		if db.TxStart != nil {
-			if headerPtr < *db.TxStart {
-				if err := db.Core.SeekTo(headerPtr); err != nil {
-					return SlotPointer{}, err
-				}
-				var headerBytes [BTreeHeaderLength]byte
-				if err := db.Core.Read(headerBytes[:]); err != nil {
-					return SlotPointer{}, err
-				}
-				newPtr, err := db.Core.Length()
-				if err != nil {
-					return SlotPointer{}, err
-				}
-				if err := db.Core.SeekTo(newPtr); err != nil {
-					return SlotPointer{}, err
-				}
-				if err := db.Core.Write(headerBytes[:]); err != nil {
-					return SlotPointer{}, err
-				}
-				headerPtr = newPtr
+		old, err := db.isOld(headerPtr)
+		if err != nil {
+			return SlotPointer{}, err
+		}
+		if old {
+			if err := db.Core.SeekTo(headerPtr); err != nil {
+				return SlotPointer{}, err
 			}
-		} else if db.Header.Tag == TagArrayList {
-			return SlotPointer{}, ErrExpectedTxStart
+			var headerBytes [BTreeHeaderLength]byte
+			if err := db.Core.Read(headerBytes[:]); err != nil {
+				return SlotPointer{}, err
+			}
+			newPtr, err := db.Core.Length()
+			if err != nil {
+				return SlotPointer{}, err
+			}
+			if err := db.Core.SeekTo(newPtr); err != nil {
+				return SlotPointer{}, err
+			}
+			if err := db.Core.Write(headerBytes[:]); err != nil {
+				return SlotPointer{}, err
+			}
+			headerPtr = newPtr
 		}
 		nextSlotPtr := SlotPointer{Position: &position, Slot: Slot{Value: headerPtr, Tag: tag}}
 		if err := db.Core.SeekTo(position); err != nil {
@@ -1290,7 +1295,7 @@ func (p SortedMapGetPart) readSlotPointer(db *Database, isTopLevel bool, writeMo
 		if found == nil {
 			return SlotPointer{}, ErrKeyNotFound
 		}
-		targetSlot, err := db.sortedTargetSlot(found.Slot.Value, p.Target)
+		targetSlot, err := db.sortedTargetSlot(found.Slot, p.Target)
 		if err != nil {
 			return SlotPointer{}, err
 		}
@@ -1322,8 +1327,7 @@ func (p SortedMapGetPart) readSlotPointer(db *Database, isTopLevel bool, writeMo
 		return SlotPointer{}, err
 	}
 
-	kvPos := result.ValuePosition - int64(db.Header.HashSize) - SlotLength
-	targetSlot, err := db.sortedTargetSlot(kvPos, p.Target)
+	targetSlot, err := db.sortedTargetSlot(result.KvSlot, p.Target)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -1377,7 +1381,7 @@ func (p SortedMapGetIndexPart) readSlotPointer(db *Database, isTopLevel bool, wr
 	if err != nil {
 		return SlotPointer{}, err
 	}
-	// return the kv_pair entry so the caller can read key and value
+	// return the entry so the caller can read key and value
 	pos := found.Position
 	targetSlot := SlotPointer{Position: &pos, Slot: found.Slot}
 	return db.readSlotPointer(writeMode, path, pathI+1, targetSlot)

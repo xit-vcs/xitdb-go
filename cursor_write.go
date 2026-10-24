@@ -7,7 +7,7 @@ type WriteCursor struct {
 
 func newWriteCursor(slotPtr SlotPointer, db *Database) *WriteCursor {
 	cursor := &WriteCursor{ReadCursor: &ReadCursor{SlotPtr: slotPtr, DB: db}}
-	if slotPtr.Position != nil {
+	if slotPtr.Position != nil && !db.isRoot(slotPtr) {
 		cursor.transaction = db.transaction
 	}
 	return cursor
@@ -18,7 +18,8 @@ func (c *WriteCursor) checkWritable() error {
 	if c.transaction != nil && c.transaction != c.DB.transaction {
 		return ErrExpiredTransaction
 	}
-	if c.SlotPtr.Position != nil && c.DB.Header.Tag == TagArrayList && c.transaction == nil {
+	// writes to moments must run inside a transaction
+	if !c.DB.isRoot(c.SlotPtr) && c.DB.transactional() && c.transaction == nil {
 		return ErrExpectedTxStart
 	}
 	return c.DB.checkFrozenSlot(c.SlotPtr)
@@ -44,14 +45,15 @@ func (c *WriteCursor) WritePath(path []PathPart) (*WriteCursor, error) {
 		return nil, err
 	}
 	// nested top-level writes could commit before the outer transaction ends
-	if c.DB.transaction != nil && c.SlotPtr.Position == nil && len(path) > 0 {
+	if c.DB.transaction != nil && c.DB.isRoot(c.SlotPtr) && len(path) > 0 {
 		return nil, ErrNestedTopLevelWrite
 	}
 	// the root tag only changes once, when the top-level data is initialized.
 	// if we haven't seen that happen, another instance may have done it since
 	// we read the header. initializing it again would discard its data.
 	// RootCursor checks as well, but this cursor may be older than that.
-	if c.SlotPtr.Position == nil && c.SlotPtr.Slot.Value == int64(DatabaseStart) && c.DB.Header.Tag == TagNone {
+	// (in streaming mode, the root slot carries the type instead.)
+	if !c.DB.Header.Streaming() && c.DB.isRoot(c.SlotPtr) && c.DB.Header.Tag == TagNone {
 		header, err := c.DB.readAndValidateHeader()
 		if err != nil {
 			return nil, err
@@ -65,8 +67,8 @@ func (c *WriteCursor) WritePath(path []PathPart) (*WriteCursor, error) {
 			initializesHistory = true
 		}
 	}
-	startsTransaction := c.DB.transaction == nil && c.SlotPtr.Position == nil &&
-		(c.DB.Header.Tag == TagArrayList || initializesHistory)
+	startsTransaction := c.DB.transaction == nil && c.DB.isRoot(c.SlotPtr) &&
+		(c.DB.transactional() || initializesHistory)
 	if startsTransaction {
 		c.DB.transaction = &transaction{}
 		defer func() { c.DB.transaction = nil }()
@@ -116,7 +118,11 @@ func (c *WriteCursor) WriteIfEmpty(data WriteableData) error {
 	if err := c.checkWritable(); err != nil {
 		return err
 	}
-	if c.SlotPtr.Slot.Empty() {
+	slotPtr, err := c.resolved()
+	if err != nil {
+		return err
+	}
+	if slotPtr.Slot.Empty() {
 		return c.Write(data)
 	}
 	return nil
@@ -157,7 +163,12 @@ func (c *WriteCursor) Writer() (*CursorWriter, error) {
 	if err := c.checkWritable(); err != nil {
 		return nil, err
 	}
-	if c.DB.Header.Tag == TagArrayList && c.DB.TxStart == nil {
+	// in streaming mode, bytes are written to the root with
+	// Write, which runs inside a transaction
+	if c.DB.Header.Streaming() && c.DB.isRoot(c.SlotPtr) {
+		return nil, ErrCursorNotWriteable
+	}
+	if c.DB.transactional() && c.DB.TxStart == nil {
 		return nil, ErrExpectedTxStart
 	}
 	ptrPos, err := c.DB.Core.Length()
@@ -269,7 +280,7 @@ func (w *CursorWriter) checkWritable() error {
 	if err := w.parent.checkWritable(); err != nil {
 		return err
 	}
-	if w.parent.DB.Header.Tag == TagArrayList && w.parent.DB.TxStart == nil {
+	if w.parent.DB.transactional() && w.parent.DB.TxStart == nil {
 		return ErrExpectedTxStart
 	}
 	active := w.parent.DB.transaction

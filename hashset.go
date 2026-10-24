@@ -12,7 +12,11 @@ type ReadHashSet struct {
 }
 
 func NewReadHashSet(cursor *ReadCursor) (*ReadHashSet, error) {
-	switch cursor.SlotPtr.Slot.Tag {
+	slotPtr, err := cursor.resolved()
+	if err != nil {
+		return nil, err
+	}
+	switch slotPtr.Slot.Tag {
 	case TagNone, TagHashMap, TagHashSet:
 		return &ReadHashSet{Cursor: cursor}, nil
 	default:
@@ -20,7 +24,7 @@ func NewReadHashSet(cursor *ReadCursor) (*ReadHashSet, error) {
 	}
 }
 
-func (s *ReadHashSet) Slot() Slot {
+func (s *ReadHashSet) Slot() (Slot, error) {
 	return s.Cursor.Slot()
 }
 
@@ -107,13 +111,15 @@ func (s *WriteHashSet) RemoveByBytes(key Bytes) (bool, error) {
 }
 
 func (s *WriteHashSet) PutByHash(hash []byte, data WriteableData) error {
-	cursor, err := s.writeCursor.WritePath([]PathPart{
+	// the key is written in the same write as the lookup, so in streaming
+	// mode, a root set does both in one transaction
+	_, err := s.writeCursor.WritePath([]PathPart{
 		HashMapGetPart{Target: HashMapGetKey{Hash: hash}},
+		Context{Function: func(cursor *WriteCursor) error {
+			return cursor.WriteIfEmpty(data)
+		}},
 	})
-	if err != nil {
-		return err
-	}
-	return cursor.WriteIfEmpty(data)
+	return err
 }
 
 func (s *WriteHashSet) PutCursorByHash(hash []byte) (*WriteCursor, error) {

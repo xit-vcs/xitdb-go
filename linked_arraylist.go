@@ -9,7 +9,11 @@ type ReadLinkedArrayList struct {
 }
 
 func NewReadLinkedArrayList(cursor *ReadCursor) (*ReadLinkedArrayList, error) {
-	switch cursor.SlotPtr.Slot.Tag {
+	slotPtr, err := cursor.resolved()
+	if err != nil {
+		return nil, err
+	}
+	switch slotPtr.Slot.Tag {
 	case TagNone, TagLinkedArrayList:
 		return &ReadLinkedArrayList{Cursor: cursor}, nil
 	default:
@@ -17,7 +21,7 @@ func NewReadLinkedArrayList(cursor *ReadCursor) (*ReadLinkedArrayList, error) {
 	}
 }
 
-func (a *ReadLinkedArrayList) Slot() Slot {
+func (a *ReadLinkedArrayList) Slot() (Slot, error) {
 	return a.Cursor.Slot()
 }
 

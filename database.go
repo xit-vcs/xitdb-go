@@ -2,15 +2,19 @@ package xitdb
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash"
+	"hash/crc64"
+	"io"
 	"math"
 	"math/big"
 )
 
 const (
-	Version         uint16 = 0
+	Version         uint16 = 1
 	DatabaseStart          = HeaderLength
 	BitCount               = 4
 	SlotCount              = 1 << BitCount
@@ -23,7 +27,7 @@ const (
 	BTreeNodeHeaderSize  = 2
 	BTreeLeafBlockSize   = BTreeNodeHeaderSize + SlotLength*BTreeSlotCount
 	BTreeBranchBlockSize = BTreeNodeHeaderSize + (SlotLength+8)*BTreeSlotCount
-	// sorted_map / sorted_set node block: a leaf holds BTreeSlotCount kv_pair slots;
+	// sorted_map / sorted_set node block: a leaf holds BTreeSlotCount entry slots;
 	// a branch holds child slots, separator slots, then BTreeSlotCount u64 counts
 	SortedLeafBlockSize   = BTreeNodeHeaderSize + SlotLength*BTreeSlotCount
 	SortedBranchBlockSize = BTreeNodeHeaderSize + (SlotLength*2+8)*BTreeSlotCount
@@ -46,9 +50,14 @@ const (
 const HeaderLength = 12
 
 type Header struct {
-	HashID      uint32
-	HashSize    uint16
-	Version     uint16
+	HashID   uint32
+	HashSize uint16
+	// the file format version. any version above 0 is streaming mode.
+	Version uint16
+	// the root tag, representing the type of the top-level data.
+	// in version 0 databases, it starts as TagNone and becomes TagArrayList
+	// once ArrayListInit is first called. in streaming mode it stays
+	// TagNone, because the root slot carries the type instead.
 	Tag         Tag
 	MagicNumber [3]byte
 }
@@ -106,7 +115,20 @@ func (h Header) Validate() error {
 	if h.Version > Version {
 		return ErrInvalidVersion
 	}
+	if h.Streaming() && h.Tag != TagNone {
+		return ErrInvalidDatabase
+	}
 	return nil
+}
+
+// whether the database is in streaming mode, which every version above 0
+// is (new databases always are). the top-level data is a root slot of any
+// type, and every write to it is a copy-on-write transaction that appends
+// a trailer holding the new root slot. the root header only caches the
+// latest trailer, so every other committed byte is immutable, and a
+// replica stays in sync by copying the bytes it doesn't have.
+func (h Header) Streaming() bool {
+	return h.Version > 0
 }
 
 func (h Header) WithTag(tag Tag) Header {
@@ -180,6 +202,112 @@ func TopLevelArrayListHeaderFromBytes(b []byte) (TopLevelArrayListHeader, error)
 	return TopLevelArrayListHeader{FileSize: fileSize, Parent: parent}, nil
 }
 
+// RootHeader
+
+// streaming mode only. the database header is followed by a random file
+// ID, which never changes, and then the root header. the file ID is part
+// of every trailer's checksum, so a replica can't be extended with bytes
+// from a different file.
+const (
+	RootHeaderStart = DatabaseStart + 8
+	RootHeaderEnd   = RootHeaderStart + RootHeaderLength
+)
+
+// streaming mode only. rewritten at every commit, as a cache of the latest
+// trailer. the root slot comes first on disk.
+const RootHeaderLength = SlotLength + 8
+
+type RootHeader struct {
+	FileSize int64
+	Root     Slot
+}
+
+func (h RootHeader) ToBytes() [RootHeaderLength]byte {
+	var buf [RootHeaderLength]byte
+	root := h.Root.ToBytes()
+	copy(buf[0:SlotLength], root[:])
+	binary.BigEndian.PutUint64(buf[SlotLength:], uint64(h.FileSize))
+	return buf
+}
+
+func RootHeaderFromBytes(b []byte) RootHeader {
+	var root [SlotLength]byte
+	copy(root[:], b[0:SlotLength])
+	return RootHeader{
+		FileSize: int64(binary.BigEndian.Uint64(b[SlotLength : SlotLength+8])),
+		Root:     SlotFromBytes(root),
+	}
+}
+
+// RootTrailer
+
+// streaming mode only. appended at the end of every transaction, so the
+// committed bytes (up to the root header's FileSize) always end with one.
+// the root slot comes first on disk.
+const RootTrailerLength = SlotLength + 16
+
+type RootTrailer struct {
+	Checksum uint64
+	// random for every transaction except the first, so separately written
+	// copies of a file can't end up with the same trailers, even when they
+	// write data of the same size. that is how a replica notices it is being
+	// sent bytes from a different history.
+	CommitID uint64
+	Root     Slot
+}
+
+func NewRootTrailer(fileID uint64, position int64, root Slot, commitID uint64) RootTrailer {
+	return RootTrailer{Checksum: computeRootTrailerChecksum(fileID, position, root, commitID), CommitID: commitID, Root: root}
+}
+
+func (t RootTrailer) ToBytes() [RootTrailerLength]byte {
+	var buf [RootTrailerLength]byte
+	root := t.Root.ToBytes()
+	copy(buf[0:SlotLength], root[:])
+	binary.BigEndian.PutUint64(buf[SlotLength:SlotLength+8], t.CommitID)
+	binary.BigEndian.PutUint64(buf[SlotLength+8:], t.Checksum)
+	return buf
+}
+
+func RootTrailerFromBytes(b []byte) RootTrailer {
+	var root [SlotLength]byte
+	copy(root[:], b[0:SlotLength])
+	return RootTrailer{
+		Checksum: binary.BigEndian.Uint64(b[SlotLength+8 : SlotLength+16]),
+		CommitID: binary.BigEndian.Uint64(b[SlotLength : SlotLength+8]),
+		Root:     SlotFromBytes(root),
+	}
+}
+
+var crc64Table = crc64.MakeTable(crc64.ECMA)
+
+// CRC-64/XZ of the file ID, the trailer's position, root, and the commit ID,
+// all big endian. including the file ID and position means the trailer can't
+// be mistaken for one written elsewhere. 64 bits makes it safe to find the
+// last trailer by scanning a file whose root header can't be trusted.
+func computeRootTrailerChecksum(fileID uint64, position int64, root Slot, commitID uint64) uint64 {
+	var buf [24 + SlotLength]byte
+	binary.BigEndian.PutUint64(buf[0:8], fileID)
+	binary.BigEndian.PutUint64(buf[8:16], uint64(position))
+	slotBytes := root.ToBytes()
+	copy(buf[16:16+SlotLength], slotBytes[:])
+	binary.BigEndian.PutUint64(buf[16+SlotLength:], commitID)
+	// the ECMA table with crc64's ones-complement init and xorout is CRC-64/XZ
+	return crc64.Checksum(buf[:], crc64Table)
+}
+
+// ReplicaState
+
+// what a streaming replica sends its source, so the source knows which
+// bytes to send back (see Database.ReplicationStart)
+type ReplicaState struct {
+	CommittedSize int64
+	// the checksum of the trailer that ends the committed bytes. it covers the
+	// file ID and the commit's random ID, so it identifies both the file and the
+	// history that led to the commit.
+	Checksum uint64
+}
+
 // BTreeHeader: a root pointer plus the element count (backs LinkedArrayList)
 
 const BTreeHeaderLength = 16
@@ -242,6 +370,64 @@ func KeyValuePairFromBytes(b []byte, hashSize int) KeyValuePair {
 	return KeyValuePair{ValueSlot: valueSlot, KeySlot: keySlot, Hash: hash}
 }
 
+// SortedKeyValuePair
+
+// a KeyValuePair without the hash, which sorted maps don't need. it is
+// the key slot followed by the value slot. sorted map entries written by
+// version 0 databases are KeyValuePairs anyway.
+const SortedKeyValuePairLength = SlotLength * 2
+
+// where the key slot is in a TagKVPair or TagSortedKVPair entry. the value slot follows it.
+func (db *Database) kvKeyOffset(tag Tag) int64 {
+	if tag == TagKVPair {
+		return int64(db.Header.HashSize)
+	}
+	return 0
+}
+
+// decodes a TagKVPair or TagSortedKVPair entry at the core's position.
+// a TagSortedKVPair has no hash, so it is all zeros.
+func decodeKvPair(core Core, tag Tag, hashSize int) (KeyValuePair, error) {
+	var kvPair KeyValuePair
+	switch tag {
+	case TagKVPair:
+		b := make([]byte, KeyValuePairLength(hashSize))
+		if err := core.Read(b); err != nil {
+			return KeyValuePair{}, err
+		}
+		kvPair = KeyValuePairFromBytes(b, hashSize)
+	case TagSortedKVPair:
+		var b [SortedKeyValuePairLength]byte
+		if err := core.Read(b[:]); err != nil {
+			return KeyValuePair{}, err
+		}
+		kvPair = KeyValuePairFromBytes(b[:], 0)
+		kvPair.Hash = make([]byte, hashSize)
+	default:
+		return KeyValuePair{}, ErrUnexpectedTag
+	}
+	if err := kvPair.KeySlot.Tag.validate(); err != nil {
+		return KeyValuePair{}, err
+	}
+	if err := kvPair.ValueSlot.Tag.validate(); err != nil {
+		return KeyValuePair{}, err
+	}
+	return kvPair, nil
+}
+
+// encodes a TagKVPair or TagSortedKVPair entry at the core's position.
+// a TagSortedKVPair leaves out the hash.
+func encodeKvPair(core Core, tag Tag, kvPair KeyValuePair) error {
+	switch tag {
+	case TagKVPair:
+		return core.Write(kvPair.ToBytes())
+	case TagSortedKVPair:
+		return core.Write(KeyValuePair{ValueSlot: kvPair.ValueSlot, KeySlot: kvPair.KeySlot}.ToBytes())
+	default:
+		return ErrUnexpectedTag
+	}
+}
+
 // BTreeNode: a leaf holds value slots; a branch holds child slots (.index) plus a
 // per-child u64 subtree count.
 
@@ -302,7 +488,8 @@ type BTreeSplitResult struct {
 }
 
 // SortedNode: a count-augmented B+tree keyed on byte strings, ordered
-// lexicographically. a leaf holds .kv_pair entries in ascending key order; a branch
+// lexicographically. a leaf holds .sorted_kv_pair entries (.kv_pair for entries
+// written by version 0) in ascending key order; a branch
 // holds child slots, separator slots (the smallest key in each child's subtree;
 // Separators[0] is an unused sentinel), and per-child subtree counts.
 
@@ -333,12 +520,14 @@ type SortedSplit struct {
 	Separator Slot
 }
 
+// insert/replace result: the entry whose value to write, whether a new entry
+// was added (vs replacing), and the new right sibling if this node split
 type SortedInsertResult struct {
-	NodePtr       int64
-	Count         int64
-	ValuePosition int64
-	Added         bool
-	Split         *SortedSplit
+	NodePtr int64
+	Count   int64
+	KvSlot  Slot
+	Added   bool
+	Split   *SortedSplit
 }
 
 type SortedRemoveResult struct {
@@ -352,9 +541,8 @@ type SortedSlot struct {
 }
 
 type SortedEntry struct {
-	KvSlot        Slot
-	KeySlot       Slot
-	ValuePosition int64
+	KvSlot  Slot
+	KeySlot Slot
 }
 
 // SortedMapGetTarget
@@ -415,7 +603,19 @@ type ContextFunction func(cursor *WriteCursor) error
 
 type transaction struct {
 	rootPosition *int64
-	frozenAt     *int64
+	// streaming mode only. the copy of the root slot that the transaction works on
+	scratchPosition *int64
+	frozenAt        *int64
+}
+
+// whether position is the transaction's root, which stays writable after freezing
+func (t *transaction) isRootPosition(position *int64) bool {
+	return position != nil && t.rootPosition != nil && *position == *t.rootPosition
+}
+
+// whether position is the copy of the root slot that the transaction works on
+func (t *transaction) isScratchPosition(position *int64) bool {
+	return position != nil && t.scratchPosition != nil && *position == *t.scratchPosition
 }
 
 type Database struct {
@@ -424,6 +624,8 @@ type Database struct {
 	Header      Header
 	TxStart     *int64
 	transaction *transaction
+	// streaming mode only. see RootHeaderStart.
+	FileID uint64
 }
 
 func NewDatabase(core Core, hasher Hasher) (*Database, error) {
@@ -441,6 +643,7 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 	}
 
 	if length == 0 {
+		// new databases are always written with the newest version
 		digestLen := uint16(db.newHash().Size())
 		db.Header = Header{
 			HashID:      hasher.ID,
@@ -449,11 +652,33 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 			Tag:         TagNone,
 			MagicNumber: MagicNumber,
 		}
+		db.FileID = hasher.FileID
+		if db.FileID == 0 {
+			fileID, err := randomUint64()
+			if err != nil {
+				return nil, fmt.Errorf("generate file id: %w", err)
+			}
+			db.FileID = fileID
+		}
 		if err := db.Header.Write(core); err != nil {
 			return nil, fmt.Errorf("write header: %w", err)
 		}
-		if err := core.Flush(); err != nil {
-			return nil, fmt.Errorf("flush: %w", err)
+		if err := writeLong(core, int64(db.FileID)); err != nil {
+			return nil, fmt.Errorf("write file id: %w", err)
+		}
+		// write the root header and commit an empty root, so the
+		// file ends with a trailer like after any transaction
+		rootHeader := RootHeader{FileSize: 0, Root: Slot{}}.ToBytes()
+		if err := core.Write(rootHeader[:]); err != nil {
+			return nil, fmt.Errorf("write root header: %w", err)
+		}
+		// the first commit's ID is 0, so a new database's bytes only
+		// depend on its file ID
+		if err := db.commitRoot(Slot{}, 0); err != nil {
+			return nil, fmt.Errorf("commit root: %w", err)
+		}
+		if err := core.Sync(); err != nil {
+			return nil, fmt.Errorf("sync: %w", err)
 		}
 	} else {
 		header, err := db.readAndValidateHeader()
@@ -461,7 +686,12 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 			return nil, err
 		}
 		db.Header = header
-		if _, err := db.validateCommittedSize(); err != nil {
+		if db.Header.Streaming() {
+			if db.FileID, err = db.readFileID(); err != nil {
+				return nil, fmt.Errorf("read file id: %w", err)
+			}
+		}
+		if _, err := db.CommittedSize(); err != nil {
 			return nil, fmt.Errorf("validate committed size: %w", err)
 		}
 	}
@@ -494,6 +724,22 @@ func (db *Database) readAndValidateHeader() (Header, error) {
 }
 
 func (db *Database) RootCursor() *WriteCursor {
+	// in streaming mode, the cursor only holds a snapshot of the root
+	// slot, and every operation that starts at it reads the root again.
+	// if this read fails, the cursor looks empty and the next operation
+	// returns the error.
+	if db.Header.Streaming() {
+		root, err := db.readRootSlot()
+		if err != nil {
+			root = Slot{}
+		}
+		position := int64(RootHeaderStart)
+		rc := &ReadCursor{
+			SlotPtr: SlotPointer{Position: &position, Slot: root},
+			DB:      db,
+		}
+		return &WriteCursor{ReadCursor: rc}
+	}
 	// another instance may have initialized the top-level data since we
 	// read the header. if this fails, the cursor sees an empty database,
 	// and the error will be returned when it is written to.
@@ -507,6 +753,15 @@ func (db *Database) RootCursor() *WriteCursor {
 		DB:      db,
 	}
 	return &WriteCursor{ReadCursor: rc}
+}
+
+// runs fn with a write cursor to the root in a single transaction,
+// discarding everything it wrote if it returns an error. use it to group
+// writes to a root that isn't an array list, such as a hash map. for an
+// array list root, WriteArrayList.AppendContext does the same.
+func (db *Database) RunContext(fn ContextFunction) error {
+	_, err := db.RootCursor().WritePath([]PathPart{Context{Function: fn}})
+	return err
 }
 
 func (db *Database) Freeze() error {
@@ -523,7 +778,189 @@ func (db *Database) Freeze() error {
 	return nil
 }
 
-// resets and borrows the supplied offsets map without closing it
+// streaming mode only. this database's ReplicaState.
+func (db *Database) ReplicaState() (ReplicaState, error) {
+	if !db.Header.Streaming() {
+		return ReplicaState{}, ErrStreamingModeRequired
+	}
+	committedSize, err := db.CommittedSize()
+	if err != nil {
+		return ReplicaState{}, err
+	}
+	trailer, err := db.readRootTrailer(committedSize)
+	if err != nil {
+		return ReplicaState{}, err
+	}
+	return ReplicaState{CommittedSize: committedSize, Checksum: trailer.Checksum}, nil
+}
+
+// streaming mode only. where to start sending committed bytes to a replica
+// in state. that's its committed size if its bytes are a prefix of this
+// database, or 0 if it must be replaced, because it's a replica of another
+// file or it has diverged from this one.
+func (db *Database) ReplicationStart(state ReplicaState) (int64, error) {
+	if !db.Header.Streaming() {
+		return 0, ErrStreamingModeRequired
+	}
+	committedSize, err := db.CommittedSize()
+	if err != nil {
+		return 0, err
+	}
+	if state.CommittedSize > committedSize {
+		return 0, nil
+	}
+	trailer, err := db.readRootTrailer(state.CommittedSize)
+	if err != nil {
+		if errors.Is(err, ErrInvalidDatabase) || errors.Is(err, ErrUnexpectedTag) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if trailer.Checksum == state.Checksum {
+		return state.CommittedSize, nil
+	}
+	return 0, nil
+}
+
+// streaming mode only. writes the committed bytes from start up to
+// end to w. start is usually from ReplicationStart, and end
+// can't be past CommittedSize. committed bytes never change except for
+// the root header, so when start is 0, a root header matching end is
+// written, making the bytes a complete database by themselves.
+func (db *Database) ReadCommitted(start, end int64, w io.Writer) error {
+	if !db.Header.Streaming() {
+		return ErrStreamingModeRequired
+	}
+	committedSize, err := db.CommittedSize()
+	if err != nil {
+		return err
+	}
+	if start < 0 || start > end || end > committedSize {
+		return ErrInvalidRange
+	}
+	if start > 0 && start < RootHeaderEnd {
+		return ErrInvalidRange
+	}
+	if start == 0 {
+		trailer, err := db.readRootTrailer(end)
+		if err != nil {
+			return err
+		}
+		if err := db.streamBytes(w, 0, RootHeaderStart); err != nil {
+			return err
+		}
+		rootHeader := RootHeader{FileSize: end, Root: trailer.Root}.ToBytes()
+		if _, err := w.Write(rootHeader[:]); err != nil {
+			return err
+		}
+		return db.streamBytes(w, RootHeaderEnd, end-RootHeaderEnd)
+	}
+	return db.streamBytes(w, start, end-start)
+}
+
+// writes length bytes, starting at start, to w
+func (db *Database) streamBytes(w io.Writer, start, length int64) error {
+	if err := db.Core.SeekTo(start); err != nil {
+		return err
+	}
+	buf := make([]byte, min(length, 4096))
+	for length > 0 {
+		chunk := min(length, int64(len(buf)))
+		if err := db.Core.Read(buf[:chunk]); err != nil {
+			return err
+		}
+		if _, err := w.Write(buf[:chunk]); err != nil {
+			return err
+		}
+		length -= chunk
+	}
+	return nil
+}
+
+// streaming mode only. writes length bytes from r at start and
+// commits them. they must be the bytes from ReadCommitted, so they end
+// with a trailer. when start is 0, this database is replaced by them;
+// otherwise start must be this database's CommittedSize.
+func (db *Database) ApplyReplicated(start int64, r io.Reader, length int64) error {
+	if !db.Header.Streaming() {
+		return ErrStreamingModeRequired
+	}
+	if start == 0 {
+		if err := db.Core.SetLength(0); err != nil {
+			return err
+		}
+	} else {
+		committedSize, err := db.CommittedSize()
+		if err != nil {
+			return err
+		}
+		if start != committedSize {
+			return ErrInvalidRange
+		}
+		// discard anything past the committed bytes, such as the remains of an interrupted sync
+		if err := db.truncate(); err != nil {
+			return err
+		}
+	}
+
+	if err := db.Core.SeekTo(start); err != nil {
+		return err
+	}
+	buf := make([]byte, min(max(length, 0), 4096))
+	for remaining := length; remaining > 0; {
+		chunk := min(remaining, int64(len(buf)))
+		if _, err := io.ReadFull(r, buf[:chunk]); err != nil {
+			return err
+		}
+		if err := db.Core.Write(buf[:chunk]); err != nil {
+			return err
+		}
+		remaining -= chunk
+	}
+
+	if start == 0 {
+		// the bytes are a different database, with its own header and file ID
+		if err := db.Core.Sync(); err != nil {
+			return err
+		}
+		header, err := db.readAndValidateHeader()
+		if err != nil {
+			return err
+		}
+		if !header.Streaming() {
+			return ErrInvalidDatabase
+		}
+		db.Header = header
+		if db.FileID, err = db.readFileID(); err != nil {
+			return err
+		}
+		if _, err := db.CommittedSize(); err != nil {
+			return err
+		}
+	} else if length > 0 {
+		// the bytes must end with a trailer. update the root header to match it.
+		trailer, err := db.readRootTrailer(start + length)
+		if err != nil {
+			return err
+		}
+		if err := db.Core.Sync(); err != nil {
+			return err
+		}
+		if err := db.writeRootHeader(trailer.Root); err != nil {
+			return err
+		}
+		if err := db.Core.Sync(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// resets and borrows the supplied offsets map without closing it.
+//
+// the target must be a new or empty database, or this returns
+// ErrTargetNotEmpty. it is always written with the newest version,
+// so this is also how a version 0 database is migrated.
 func (db *Database) Compact(targetCore Core, offsetMap OffsetMap) (*Database, error) {
 	// cached offsets only apply to this compaction's target
 	if err := offsetMap.Reset(); err != nil {
@@ -535,100 +972,80 @@ func (db *Database) Compact(targetCore Core, offsetMap OffsetMap) (*Database, er
 		return nil, fmt.Errorf("init target: %w", err)
 	}
 
-	if db.Header.Tag == TagNone {
-		if err := target.Core.Sync(); err != nil {
-			return nil, fmt.Errorf("sync: %w", err)
-		}
-		return target, nil
+	// the target must be a new or empty database, because compaction
+	// writes to it with ordinary transactions. this also rejects
+	// compacting a database into its own file.
+	if !target.Header.Streaming() {
+		return nil, ErrTargetNotEmpty
 	}
-	if db.Header.Tag != TagArrayList {
-		return nil, ErrUnexpectedTag
-	}
-
-	// read source's top-level ArrayListHeader
-	if err := db.Core.SeekTo(int64(DatabaseStart)); err != nil {
-		return nil, fmt.Errorf("read source header: %w", err)
-	}
-	var headerBytes [ArrayListHeaderLength]byte
-	if err := db.Core.Read(headerBytes[:]); err != nil {
-		return nil, fmt.Errorf("read source header: %w", err)
-	}
-	sourceHeader, err := ArrayListHeaderFromBytes(headerBytes[:])
+	targetRoot, err := target.readRootSlot()
 	if err != nil {
-		return nil, fmt.Errorf("read source header: %w", err)
+		return nil, fmt.Errorf("read target root: %w", err)
 	}
-	if sourceHeader.Size == 0 {
-		if err := target.Core.Sync(); err != nil {
-			return nil, fmt.Errorf("sync: %w", err)
-		}
-		return target, nil
+	if !targetRoot.Empty() {
+		return nil, ErrTargetNotEmpty
 	}
 
-	// read the last moment's slot
-	lastKey := sourceHeader.Size - 1
-	var shift byte
-	if lastKey < SlotCount {
-		shift = 0
+	// in streaming mode, the root slot carries the type of the top-level data
+	var sourceRoot Slot
+	if db.Header.Streaming() {
+		sourceRoot, err = db.readRootSlot()
+		if err != nil {
+			return nil, fmt.Errorf("read source root: %w", err)
+		}
 	} else {
-		shift = byte(math.Log(float64(lastKey)) / math.Log(float64(SlotCount)))
-	}
-	lastSlotPtr, err := db.readArrayListSlot(sourceHeader.Ptr, lastKey, shift, ReadOnly, true)
-	if err != nil {
-		return nil, fmt.Errorf("read last slot: %w", err)
-	}
-	momentSlot := lastSlotPtr.Slot
-
-	// write TopLevelArrayListHeader + root index block to target
-	if err := target.Core.SeekTo(int64(DatabaseStart)); err != nil {
-		return nil, fmt.Errorf("write target header: %w", err)
-	}
-	targetArrayListPtr := int64(DatabaseStart) + int64(TopLevelArrayListHeaderLength)
-	tlHeader := TopLevelArrayListHeader{
-		FileSize: 0,
-		Parent:   ArrayListHeader{Ptr: targetArrayListPtr, Size: 1},
-	}
-	tlBytes := tlHeader.ToBytes()
-	if err := target.Core.Write(tlBytes[:]); err != nil {
-		return nil, fmt.Errorf("write target header: %w", err)
-	}
-	if err := target.Core.Write(make([]byte, IndexBlockSize)); err != nil {
-		return nil, fmt.Errorf("write target index block: %w", err)
+		sourceRoot = Slot{Value: int64(DatabaseStart), Tag: db.Header.Tag}
 	}
 
-	// recursively remap the moment slot
+	// an empty root compacts to a new database. a root explicitly
+	// set to null isn't empty, so it is remapped below.
+	if sourceRoot.Empty() {
+		return target, nil
+	}
+
+	// the target is written as one ordinary transaction, so it is committed
+	// and fsynced like any other (callers typically rename it over an
+	// existing database file). the remap must run inside the transaction,
+	// because starting one truncates the target.
 	compactor := compactor{
 		sourceCore: db.Core,
 		targetCore: target.Core,
 		hashSize:   db.Header.HashSize,
 		offsetMap:  offsetMap,
 	}
-	remappedMoment, err := compactor.remapSlot(momentSlot)
-	if err != nil {
-		return nil, fmt.Errorf("remap: %w", err)
+	remap := func(slot Slot) ContextFunction {
+		return func(cursor *WriteCursor) error {
+			remapped, err := compactor.remapSlot(slot)
+			if err != nil {
+				return fmt.Errorf("remap: %w", err)
+			}
+			return cursor.Write(remapped)
+		}
 	}
 
-	// write remapped moment slot into position 0 of target's root index block
-	if err := target.Core.SeekTo(targetArrayListPtr); err != nil {
-		return nil, fmt.Errorf("write remapped slot: %w", err)
-	}
-	remappedBytes := remappedMoment.ToBytes()
-	if err := target.Core.Write(remappedBytes[:]); err != nil {
-		return nil, fmt.Errorf("write remapped slot: %w", err)
-	}
-
-	// update target's DatabaseHeader tag
-	target.Header = target.Header.WithTag(TagArrayList)
-	if err := target.Core.SeekTo(0); err != nil {
-		return nil, fmt.Errorf("write target db header: %w", err)
-	}
-	if err := target.Header.Write(target.Core); err != nil {
-		return nil, fmt.Errorf("write target db header: %w", err)
-	}
-
-	// fsync so the compacted database is durable, since callers
-	// typically rename it over an existing database file
-	if err := target.updateCommittedSize(); err != nil {
-		return nil, fmt.Errorf("update committed size: %w", err)
+	switch sourceRoot.Tag {
+	case TagArrayList:
+		// an array list root is a history, and its latest moment
+		// becomes the only moment of a new one
+		lastMoment, err := db.RootCursor().ReadPathSlot([]PathPart{ArrayListGet{Index: -1}})
+		if err != nil {
+			return nil, fmt.Errorf("read last moment: %w", err)
+		}
+		if !lastMoment.Empty() {
+			if _, err := target.RootCursor().WritePath([]PathPart{
+				ArrayListInit{},
+				ArrayListAppend{},
+				Context{Function: remap(lastMoment)},
+			}); err != nil {
+				return nil, err
+			}
+		}
+	default:
+		// any other root is remapped whole. this is also how a version 0
+		// database with a top-level hash map is migrated.
+		if err := target.RunContext(remap(sourceRoot)); err != nil {
+			return nil, err
+		}
 	}
 
 	return target, nil
@@ -636,7 +1053,36 @@ func (db *Database) Compact(targetCore Core, offsetMap OffsetMap) (*Database, er
 
 // committed size
 
-func (db *Database) validateCommittedSize() (int64, error) {
+// the number of bytes that belong to committed transactions. in streaming
+// mode, they never change except for the root header (see ReadCommitted).
+func (db *Database) CommittedSize() (int64, error) {
+	if db.Header.Streaming() {
+		header, err := db.readRootHeader()
+		if err != nil {
+			return 0, err
+		}
+		minimumSize := int64(RootHeaderEnd + RootTrailerLength)
+		if header.FileSize < minimumSize {
+			return 0, ErrInvalidDatabase
+		}
+		fileSize, err := db.Core.Length()
+		if err != nil {
+			return 0, err
+		}
+		if fileSize < header.FileSize {
+			return 0, ErrTruncatedDatabase
+		}
+		// the committed bytes must end with a trailer matching the header
+		trailer, err := db.readRootTrailer(header.FileSize)
+		if err != nil {
+			return 0, err
+		}
+		if trailer.Root != header.Root {
+			return 0, ErrInvalidDatabase
+		}
+		return header.FileSize, nil
+	}
+
 	if db.Header.Tag != TagArrayList {
 		return db.Core.Length()
 	}
@@ -676,13 +1122,38 @@ func (db *Database) validateCommittedSize() (int64, error) {
 }
 
 func (db *Database) truncate() error {
-	committedSize, err := db.validateCommittedSize()
+	committedSize, err := db.CommittedSize()
 	if err != nil {
 		return err
 	}
 	active := db.transaction
 	if active != nil && active.frozenAt != nil && *active.frozenAt > committedSize {
 		// retain frozen bytes without publishing the failed transaction
+		if db.Header.Streaming() {
+			// discard what follows the frozen bytes, then commit the
+			// current root again after them, so they end with a trailer
+			fileSize, err := db.Core.Length()
+			if err != nil {
+				return err
+			}
+			if fileSize > *active.frozenAt {
+				if err := db.Core.SetLength(*active.frozenAt); err != nil {
+					return err
+				}
+			}
+			root, err := db.readRootSlot()
+			if err != nil {
+				return err
+			}
+			commitID, err := randomUint64()
+			if err != nil {
+				return err
+			}
+			if err := db.commitRoot(root, commitID); err != nil {
+				return err
+			}
+			return db.Core.Sync()
+		}
 		if err := db.Core.Sync(); err != nil {
 			return err
 		}
@@ -737,6 +1208,238 @@ func (db *Database) updateCommittedSize() error {
 	return db.Core.Sync()
 }
 
+// streaming mode only
+func (db *Database) readFileID() (uint64, error) {
+	if err := db.Core.SeekTo(int64(DatabaseStart)); err != nil {
+		return 0, err
+	}
+	fileID, err := readLong(db.Core)
+	if err != nil {
+		return 0, err
+	}
+	return uint64(fileID), nil
+}
+
+// streaming mode only
+func (db *Database) readRootHeader() (RootHeader, error) {
+	if err := db.Core.SeekTo(RootHeaderStart); err != nil {
+		return RootHeader{}, err
+	}
+	var b [RootHeaderLength]byte
+	if err := db.Core.Read(b[:]); err != nil {
+		return RootHeader{}, err
+	}
+	header := RootHeaderFromBytes(b[:])
+	if err := header.Root.Tag.validate(); err != nil {
+		return RootHeader{}, err
+	}
+	return header, nil
+}
+
+// streaming mode only. the most recently committed root slot.
+func (db *Database) readRootSlot() (Slot, error) {
+	header, err := db.readRootHeader()
+	if err != nil {
+		return Slot{}, err
+	}
+	return header.Root, nil
+}
+
+// streaming mode only. the trailer that ends at end.
+func (db *Database) readRootTrailer(end int64) (RootTrailer, error) {
+	if end < RootTrailerLength {
+		return RootTrailer{}, ErrInvalidDatabase
+	}
+	trailerPos := end - RootTrailerLength
+	if err := db.Core.SeekTo(trailerPos); err != nil {
+		return RootTrailer{}, err
+	}
+	var b [RootTrailerLength]byte
+	if err := db.Core.Read(b[:]); err != nil {
+		return RootTrailer{}, err
+	}
+	trailer := RootTrailerFromBytes(b[:])
+	if trailer.Checksum != computeRootTrailerChecksum(db.FileID, trailerPos, trailer.Root, trailer.CommitID) {
+		return RootTrailer{}, ErrInvalidDatabase
+	}
+	if err := trailer.Root.Tag.validate(); err != nil {
+		return RootTrailer{}, err
+	}
+	return trailer, nil
+}
+
+// for file IDs and commit IDs
+func randomUint64() (uint64, error) {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return 0, err
+	}
+	return binary.BigEndian.Uint64(b[:]), nil
+}
+
+// streaming mode only. completes a transaction by appending a trailer
+// for root and updating the root header. callers must sync afterwards
+// to make the header itself durable.
+func (db *Database) commitRoot(root Slot, commitID uint64) error {
+	trailerPos, err := db.Core.Length()
+	if err != nil {
+		return err
+	}
+	if err := db.Core.SeekTo(trailerPos); err != nil {
+		return err
+	}
+	trailer := NewRootTrailer(db.FileID, trailerPos, root, commitID).ToBytes()
+	if err := db.Core.Write(trailer[:]); err != nil {
+		return err
+	}
+
+	// flush and fsync before updating the header, because updating
+	// the header is what completes the transaction. without the
+	// fsync, the OS could persist the header before the data it
+	// points to, so a crash could commit a transaction whose data
+	// never reached disk.
+	if err := db.Core.Sync(); err != nil {
+		return err
+	}
+
+	return db.writeRootHeader(root)
+}
+
+// streaming mode only. points the root header at root, which must be
+// in the trailer that ends the file.
+func (db *Database) writeRootHeader(root Slot) error {
+	fileSize, err := db.Core.Length()
+	if err != nil {
+		return err
+	}
+	if err := db.Core.SeekTo(RootHeaderStart); err != nil {
+		return err
+	}
+	header := RootHeader{FileSize: fileSize, Root: root}.ToBytes()
+	return db.Core.Write(header[:])
+}
+
+// whether this slot pointer is the root of the database
+func (db *Database) isRoot(slotPtr SlotPointer) bool {
+	if db.Header.Streaming() {
+		return slotPtr.Position != nil && *slotPtr.Position == RootHeaderStart
+	}
+	return slotPtr.Position == nil && slotPtr.Slot.Value == int64(DatabaseStart)
+}
+
+// whether writes must happen inside a transaction. in version 0 databases,
+// only an array list root needs them; otherwise no moment can reference
+// the data, so it is all mutable in place.
+func (db *Database) transactional() bool {
+	return db.Header.Streaming() || db.Header.Tag == TagArrayList
+}
+
+// the collection tag that an init path part creates, if any
+func initTag(part PathPart) (Tag, bool) {
+	switch p := part.(type) {
+	case ArrayListInit, *ArrayListInit:
+		return TagArrayList, true
+	case LinkedArrayListInit, *LinkedArrayListInit:
+		return TagLinkedArrayList, true
+	case HashMapInitPart:
+		return hashMapInitTag(p), true
+	case *HashMapInitPart:
+		return hashMapInitTag(*p), true
+	case SortedMapInitPart:
+		return sortedMapInitTag(p), true
+	case *SortedMapInitPart:
+		return sortedMapInitTag(*p), true
+	default:
+		return TagNone, false
+	}
+}
+
+func hashMapInitTag(p HashMapInitPart) Tag {
+	if p.Counted {
+		if p.Set {
+			return TagCountedHashSet
+		}
+		return TagCountedHashMap
+	}
+	if p.Set {
+		return TagHashSet
+	}
+	return TagHashMap
+}
+
+func sortedMapInitTag(p SortedMapInitPart) Tag {
+	if p.Set {
+		return TagSortedSet
+	}
+	return TagSortedMap
+}
+
+// the init path part for a collection tag, if any
+func initPartFor(tag Tag) (PathPart, bool) {
+	switch tag {
+	case TagArrayList:
+		return ArrayListInit{}, true
+	case TagLinkedArrayList:
+		return LinkedArrayListInit{}, true
+	case TagHashMap:
+		return HashMapInitPart{Counted: false, Set: false}, true
+	case TagHashSet:
+		return HashMapInitPart{Counted: false, Set: true}, true
+	case TagCountedHashMap:
+		return HashMapInitPart{Counted: true, Set: false}, true
+	case TagCountedHashSet:
+		return HashMapInitPart{Counted: true, Set: true}, true
+	case TagSortedMap:
+		return SortedMapInitPart{Set: false}, true
+	case TagSortedSet:
+		return SortedMapInitPart{Set: true}, true
+	default:
+		return nil, false
+	}
+}
+
+// whether the data at ptr predates this transaction, so it must be
+// copied before it is modified. outside a transaction nothing is old,
+// but a transactional database can't be written outside one.
+func (db *Database) isOld(ptr int64) (bool, error) {
+	if db.TxStart == nil {
+		if db.transactional() {
+			return false, ErrExpectedTxStart
+		}
+		return false, nil
+	}
+	return ptr < *db.TxStart, nil
+}
+
+// copies an index block to the end unless it was made in this transaction
+func (db *Database) copyIndexBlockIfOld(ptr int64) (int64, error) {
+	old, err := db.isOld(ptr)
+	if err != nil {
+		return 0, err
+	}
+	if !old {
+		return ptr, nil
+	}
+	indexBlock := make([]byte, IndexBlockSize)
+	if err := db.Core.SeekTo(ptr); err != nil {
+		return 0, err
+	}
+	if err := db.Core.Read(indexBlock); err != nil {
+		return 0, err
+	}
+	nextPtr, err := db.Core.Length()
+	if err != nil {
+		return 0, err
+	}
+	if err := db.Core.SeekTo(nextPtr); err != nil {
+		return 0, err
+	}
+	if err := db.Core.Write(indexBlock); err != nil {
+		return 0, err
+	}
+	return nextPtr, nil
+}
+
 // checkHash
 
 func (db *Database) checkHash(hash []byte) ([]byte, error) {
@@ -761,7 +1464,7 @@ func checkLong(n int64) (int64, error) {
 func (db *Database) checkFrozenSlot(slotPtr SlotPointer) error {
 	active := db.transaction
 	if active != nil && active.frozenAt != nil && slotPtr.Position != nil &&
-		*slotPtr.Position < *active.frozenAt && (active.rootPosition == nil || *slotPtr.Position != *active.rootPosition) {
+		*slotPtr.Position < *active.frozenAt && !active.isRootPosition(slotPtr.Position) {
 		return ErrFrozenSlot
 	}
 	return nil
@@ -791,7 +1494,105 @@ func (db *Database) readSlotPointer(writeMode WriteMode, path []PathPart, pathI 
 	}
 	part := path[pathI]
 
-	isTopLevel := slotPtr.Position == nil && slotPtr.Slot.Value == int64(DatabaseStart)
+	// in streaming mode, every write that starts at the root is a transaction
+	if db.Header.Streaming() && db.isRoot(slotPtr) {
+		root, err := db.readRootSlot()
+		if err != nil {
+			return SlotPointer{}, err
+		}
+
+		// the position of a read path doesn't matter, but it must not be
+		// RootHeaderStart or this would recurse forever
+		if writeMode == ReadOnly {
+			return db.readSlotPointer(writeMode, path, pathI, SlotPointer{Position: nil, Slot: root})
+		}
+
+		// initializing an initialized root is free, so a wrapper like
+		// WriteArrayList can hold a root cursor without a transaction. like
+		// starting one, it discards data left by an unfinished transaction.
+		// (WritePath rejects root writes inside a transaction, so none
+		// is open here.)
+		if len(path)-pathI == 1 && root.Tag != TagNone {
+			if tag, ok := initTag(part); ok && tag == root.Tag {
+				if err := db.truncate(); err != nil {
+					return SlotPointer{}, err
+				}
+				position := int64(RootHeaderStart)
+				return SlotPointer{Position: &position, Slot: root}, nil
+			}
+		}
+
+		// discard data left by an unfinished transaction after a crash
+		if err := db.truncate(); err != nil {
+			return SlotPointer{}, err
+		}
+		scratchPos, err := db.Core.Length()
+		if err != nil {
+			return SlotPointer{}, err
+		}
+		txStart := scratchPos
+		db.TxStart = &txStart
+		defer func() { db.TxStart = nil }()
+		// the copy is the transaction's root, so it stays writable after freezing
+		if db.transaction != nil {
+			db.transaction.rootPosition = &scratchPos
+			db.transaction.scratchPosition = &scratchPos
+		}
+
+		// the transaction works on a copy of the root slot
+		if err := db.Core.SeekTo(scratchPos); err != nil {
+			return SlotPointer{}, err
+		}
+		rootBytes := root.ToBytes()
+		if err := db.Core.Write(rootBytes[:]); err != nil {
+			return SlotPointer{}, err
+		}
+		rootPtr := SlotPointer{Position: &scratchPos, Slot: root}
+
+		// every collection expects its init part to copy its header or root
+		// block into the transaction before anything writes to it. the root
+		// has no enclosing init part, so run one here.
+		if initPart, ok := initPartFor(root.Tag); ok {
+			rootPtr, err = db.readSlotPointer(writeMode, []PathPart{initPart}, 0, rootPtr)
+			if err != nil {
+				return SlotPointer{}, err
+			}
+		}
+
+		result, err := db.readSlotPointer(writeMode, path, pathI, rootPtr)
+		if err != nil {
+			return SlotPointer{}, err
+		}
+
+		// the copy now holds the new root, so commit it
+		if err := db.Core.SeekTo(scratchPos); err != nil {
+			return SlotPointer{}, err
+		}
+		var nextRootBytes [SlotLength]byte
+		if err := db.Core.Read(nextRootBytes[:]); err != nil {
+			return SlotPointer{}, err
+		}
+		nextRoot := SlotFromBytes(nextRootBytes)
+		commitID, err := randomUint64()
+		if err != nil {
+			return SlotPointer{}, err
+		}
+		if err := db.commitRoot(nextRoot, commitID); err != nil {
+			return SlotPointer{}, err
+		}
+
+		// a path that ends at the root (such as an init or a write) returns
+		// a root cursor, so it can be used for later transactions
+		if result.Position != nil && *result.Position == scratchPos {
+			position := int64(RootHeaderStart)
+			result = SlotPointer{Position: &position, Slot: nextRoot}
+		}
+		return result, nil
+	}
+
+	// in streaming mode the root is handled above, so the
+	// top-level special cases below only apply to version 0
+	isTopLevel := !db.Header.Streaming() && db.isRoot(slotPtr)
 
 	isTxStart := writeMode == ReadWrite && isTopLevel && db.Header.Tag == TagArrayList && db.TxStart == nil
 	if isTxStart {
@@ -879,37 +1680,21 @@ func (db *Database) readMapSlot(indexPos int64, keyHash []byte, keyOffset byte, 
 	case TagIndex:
 		nextPtr := ptr
 		if writeMode == ReadWrite && !isTopLevel {
-			if db.TxStart != nil {
-				if nextPtr < *db.TxStart {
-					if err := db.Core.SeekTo(ptr); err != nil {
-						return HashMapGetResult{}, err
-					}
-					indexBlock := make([]byte, IndexBlockSize)
-					if err := db.Core.Read(indexBlock); err != nil {
-						return HashMapGetResult{}, err
-					}
-					var err error
-					nextPtr, err = db.Core.Length()
-					if err != nil {
-						return HashMapGetResult{}, err
-					}
-					if err := db.Core.SeekTo(nextPtr); err != nil {
-						return HashMapGetResult{}, err
-					}
-					if err := db.Core.Write(indexBlock); err != nil {
-						return HashMapGetResult{}, err
-					}
-					if err := db.Core.SeekTo(slotPos); err != nil {
-						return HashMapGetResult{}, err
-					}
-					newSlot := Slot{Value: nextPtr, Tag: TagIndex}
-					newSlotBytes := newSlot.ToBytes()
-					if err := db.Core.Write(newSlotBytes[:]); err != nil {
-						return HashMapGetResult{}, err
-					}
+			var err error
+			nextPtr, err = db.copyIndexBlockIfOld(ptr)
+			if err != nil {
+				return HashMapGetResult{}, err
+			}
+			if nextPtr != ptr {
+				// make slot point to the copied block
+				if err := db.Core.SeekTo(slotPos); err != nil {
+					return HashMapGetResult{}, err
 				}
-			} else if db.Header.Tag == TagArrayList {
-				return HashMapGetResult{}, ErrExpectedTxStart
+				newSlot := Slot{Value: nextPtr, Tag: TagIndex}
+				newSlotBytes := newSlot.ToBytes()
+				if err := db.Core.Write(newSlotBytes[:]); err != nil {
+					return HashMapGetResult{}, err
+				}
 			}
 		}
 		return db.readMapSlot(nextPtr, keyHash, keyOffset+1, writeMode, isTopLevel, target)
@@ -926,43 +1711,43 @@ func (db *Database) readMapSlot(indexPos int64, keyHash []byte, keyOffset byte, 
 
 		if bytes.Equal(kvPair.Hash, keyHash) {
 			if writeMode == ReadWrite && !isTopLevel {
-				if db.TxStart != nil {
-					if ptr < *db.TxStart {
-						hashPos, err := db.Core.Length()
-						if err != nil {
-							return HashMapGetResult{}, err
-						}
-						if err := db.Core.SeekTo(hashPos); err != nil {
-							return HashMapGetResult{}, err
-						}
-						keySlotPos := hashPos + int64(db.Header.HashSize)
-						valueSlotPos := keySlotPos + int64(SlotLength)
-						if err := db.Core.Write(kvPair.ToBytes()); err != nil {
-							return HashMapGetResult{}, err
-						}
-
-						nextSlot := Slot{Value: hashPos, Tag: TagKVPair}
-						if err := db.Core.SeekTo(slotPos); err != nil {
-							return HashMapGetResult{}, err
-						}
-						nextSlotBytes := nextSlot.ToBytes()
-						if err := db.Core.Write(nextSlotBytes[:]); err != nil {
-							return HashMapGetResult{}, err
-						}
-
-						var nextSlotPtr SlotPointer
-						switch target.(type) {
-						case HashMapGetKVPair:
-							nextSlotPtr = SlotPointer{Position: &slotPos, Slot: nextSlot}
-						case HashMapGetKey:
-							nextSlotPtr = SlotPointer{Position: &keySlotPos, Slot: kvPair.KeySlot}
-						case HashMapGetValue:
-							nextSlotPtr = SlotPointer{Position: &valueSlotPos, Slot: kvPair.ValueSlot}
-						}
-						return HashMapGetResult{SlotPtr: nextSlotPtr, IsEmpty: false}, nil
+				old, err := db.isOld(ptr)
+				if err != nil {
+					return HashMapGetResult{}, err
+				}
+				if old {
+					hashPos, err := db.Core.Length()
+					if err != nil {
+						return HashMapGetResult{}, err
 					}
-				} else if db.Header.Tag == TagArrayList {
-					return HashMapGetResult{}, ErrExpectedTxStart
+					if err := db.Core.SeekTo(hashPos); err != nil {
+						return HashMapGetResult{}, err
+					}
+					keySlotPos := hashPos + int64(db.Header.HashSize)
+					valueSlotPos := keySlotPos + int64(SlotLength)
+					if err := db.Core.Write(kvPair.ToBytes()); err != nil {
+						return HashMapGetResult{}, err
+					}
+
+					nextSlot := Slot{Value: hashPos, Tag: TagKVPair}
+					if err := db.Core.SeekTo(slotPos); err != nil {
+						return HashMapGetResult{}, err
+					}
+					nextSlotBytes := nextSlot.ToBytes()
+					if err := db.Core.Write(nextSlotBytes[:]); err != nil {
+						return HashMapGetResult{}, err
+					}
+
+					var nextSlotPtr SlotPointer
+					switch target.(type) {
+					case HashMapGetKVPair:
+						nextSlotPtr = SlotPointer{Position: &slotPos, Slot: nextSlot}
+					case HashMapGetKey:
+						nextSlotPtr = SlotPointer{Position: &keySlotPos, Slot: kvPair.KeySlot}
+					case HashMapGetValue:
+						nextSlotPtr = SlotPointer{Position: &valueSlotPos, Slot: kvPair.ValueSlot}
+					}
+					return HashMapGetResult{SlotPtr: nextSlotPtr, IsEmpty: false}, nil
 				}
 			}
 
@@ -1121,43 +1906,24 @@ func (db *Database) removeMapSlot(indexPos int64, keyHash []byte, keyOffset byte
 		}
 	}
 
-	// there was more than one used slot, or a single INDEX slot
+	// there was more than one used slot, or a single INDEX slot,
+	// so we must keep this index block. update the slot in it,
+	// copying the block first unless it belongs to this transaction.
+	nextIndexPos := indexPos
 	if !isTopLevel {
-		if db.TxStart != nil {
-			if indexPos < *db.TxStart {
-				nextIndexPos, err := db.Core.Length()
-				if err != nil {
-					return Slot{}, err
-				}
-				if err := db.Core.SeekTo(nextIndexPos); err != nil {
-					return Slot{}, err
-				}
-				if err := db.Core.Write(indexBlock); err != nil {
-					return Slot{}, err
-				}
-				nextSlotPos := nextIndexPos + int64(SlotLength*i)
-				if err := db.Core.SeekTo(nextSlotPos); err != nil {
-					return Slot{}, err
-				}
-				nsb := nextSlot.ToBytes()
-				if err := db.Core.Write(nsb[:]); err != nil {
-					return Slot{}, err
-				}
-				return Slot{Value: nextIndexPos, Tag: TagIndex}, nil
-			}
-		} else if db.Header.Tag == TagArrayList {
-			return Slot{}, ErrExpectedTxStart
+		nextIndexPos, err = db.copyIndexBlockIfOld(indexPos)
+		if err != nil {
+			return Slot{}, err
 		}
 	}
-
-	if err := db.Core.SeekTo(slotPos); err != nil {
+	if err := db.Core.SeekTo(nextIndexPos + int64(SlotLength*i)); err != nil {
 		return Slot{}, err
 	}
 	nsb := nextSlot.ToBytes()
 	if err := db.Core.Write(nsb[:]); err != nil {
 		return Slot{}, err
 	}
-	return Slot{Value: indexPos, Tag: TagIndex}, nil
+	return Slot{Value: nextIndexPos, Tag: TagIndex}, nil
 }
 
 // ArrayList methods
@@ -1279,37 +2045,21 @@ func (db *Database) readArrayListSlot(indexPos int64, key int64, shift byte, wri
 	case TagIndex:
 		nextPtr := ptr
 		if writeMode == ReadWrite && !isTopLevel {
-			if db.TxStart != nil {
-				if nextPtr < *db.TxStart {
-					if err := db.Core.SeekTo(ptr); err != nil {
-						return SlotPointer{}, err
-					}
-					indexBlock := make([]byte, IndexBlockSize)
-					if err := db.Core.Read(indexBlock); err != nil {
-						return SlotPointer{}, err
-					}
-					var err error
-					nextPtr, err = db.Core.Length()
-					if err != nil {
-						return SlotPointer{}, err
-					}
-					if err := db.Core.SeekTo(nextPtr); err != nil {
-						return SlotPointer{}, err
-					}
-					if err := db.Core.Write(indexBlock); err != nil {
-						return SlotPointer{}, err
-					}
-					if err := db.Core.SeekTo(slotPos); err != nil {
-						return SlotPointer{}, err
-					}
-					newSlot := Slot{Value: nextPtr, Tag: TagIndex}
-					nsb := newSlot.ToBytes()
-					if err := db.Core.Write(nsb[:]); err != nil {
-						return SlotPointer{}, err
-					}
+			var err error
+			nextPtr, err = db.copyIndexBlockIfOld(ptr)
+			if err != nil {
+				return SlotPointer{}, err
+			}
+			if nextPtr != ptr {
+				// make slot point to the copied block
+				if err := db.Core.SeekTo(slotPos); err != nil {
+					return SlotPointer{}, err
 				}
-			} else if db.Header.Tag == TagArrayList {
-				return SlotPointer{}, ErrExpectedTxStart
+				newSlot := Slot{Value: nextPtr, Tag: TagIndex}
+				nsb := newSlot.ToBytes()
+				if err := db.Core.Write(nsb[:]); err != nil {
+					return SlotPointer{}, err
+				}
 			}
 		}
 		return db.readArrayListSlot(nextPtr, key, shift-1, writeMode, isTopLevel)
@@ -1357,23 +2107,10 @@ func (db *Database) readArrayListSlice(header ArrayListHeader, size int64, isTop
 	}
 	// the new root may still belong to a past moment. unlike child
 	// nodes, root nodes are written directly, so copy it now.
-	if !isTopLevel && db.TxStart != nil && indexPos < *db.TxStart {
-		var indexBlock [IndexBlockSize]byte
-		if err := db.Core.SeekTo(indexPos); err != nil {
-			return ArrayListHeader{}, err
-		}
-		if err := db.Core.Read(indexBlock[:]); err != nil {
-			return ArrayListHeader{}, err
-		}
+	if !isTopLevel {
 		var err error
-		indexPos, err = db.Core.Length()
+		indexPos, err = db.copyIndexBlockIfOld(indexPos)
 		if err != nil {
-			return ArrayListHeader{}, err
-		}
-		if err := db.Core.SeekTo(indexPos); err != nil {
-			return ArrayListHeader{}, err
-		}
-		if err := db.Core.Write(indexBlock[:]); err != nil {
 			return ArrayListHeader{}, err
 		}
 	}
@@ -1484,13 +2221,15 @@ func (db *Database) writeBTreeNode(node BTreeNode) (int64, error) {
 // a node is safe to mutate in place when it was created in the current transaction
 // (offset >= TxStart), since no committed moment and no pre-concat sharing can
 // reference it. concat advances TxStart (an implicit freeze) precisely so its shared
-// subtrees fall below it here. for an ephemeral (non-array-list) top level there is no
+// subtrees fall below it here. for an ephemeral (non-transactional) database there is no
 // transaction, so everything is mutable in place until a concat first sets TxStart.
 func (db *Database) btreeReusable(ptr int64) bool {
-	if db.TxStart != nil {
-		return ptr >= *db.TxStart
+	// a transactional database outside a transaction can't reuse anything
+	old, err := db.isOld(ptr)
+	if err != nil {
+		return false
 	}
-	return db.Header.Tag != TagArrayList
+	return !old
 }
 
 // write a new version of a node, reusing oldPtr's position in place if that node
@@ -2099,17 +2838,25 @@ func (db *Database) sortedWriteNode(node SortedNode, oldPtr int64) (int64, error
 }
 
 func (db *Database) readKvPair(kvSlot Slot) (KeyValuePair, error) {
-	if kvSlot.Tag != TagKVPair {
-		return KeyValuePair{}, ErrUnexpectedTag
-	}
 	if err := db.Core.SeekTo(kvSlot.Value); err != nil {
 		return KeyValuePair{}, err
 	}
-	b := make([]byte, KeyValuePairLength(int(db.Header.HashSize)))
-	if err := db.Core.Read(b); err != nil {
-		return KeyValuePair{}, err
+	return decodeKvPair(db.Core, kvSlot.Tag, int(db.Header.HashSize))
+}
+
+// writes a TagKVPair or TagSortedKVPair entry at the end and returns its slot
+func (db *Database) writeKvPair(tag Tag, kvPair KeyValuePair) (Slot, error) {
+	pos, err := db.Core.Length()
+	if err != nil {
+		return Slot{}, err
 	}
-	return KeyValuePairFromBytes(b, int(db.Header.HashSize)), nil
+	if err := db.Core.SeekTo(pos); err != nil {
+		return Slot{}, err
+	}
+	if err := encodeKvPair(db.Core, tag, kvPair); err != nil {
+		return Slot{}, err
+	}
+	return Slot{Value: pos, Tag: tag}, nil
 }
 
 // lexicographic comparison of the byte key stored at keySlot (a bytes or short_bytes
@@ -2149,7 +2896,7 @@ func (db *Database) compareKey(keySlot Slot, target []byte) (int, error) {
 	}
 }
 
-// descend by key to the matching leaf entry (the .kv_pair slot), or nil
+// descend by key to the matching leaf entry, or nil
 func (db *Database) sortedGet(rootPtr int64, key []byte) (*SortedSlot, error) {
 	nodePtr := rootPtr
 	for {
@@ -2291,31 +3038,29 @@ func (db *Database) writeKey(key []byte) (Slot, error) {
 	return Slot{Value: pos, Tag: TagBytes}, nil
 }
 
-// materialize a new leaf entry: write the key bytes and a KeyValuePair with an empty
-// value (the caller fills it via ValuePosition). the hash field is unused by sorted
-// maps (navigation is by key bytes), so it is left zero.
+// materialize a new leaf entry: write the key bytes and a key-value pair with
+// an empty value (the caller fills it in). navigation is by key bytes, so the
+// entry has no hash, except in version 0 databases, which older builds must
+// still be able to read.
 func (db *Database) sortedNewEntry(key []byte) (SortedEntry, error) {
 	keySlot, err := db.writeKey(key)
 	if err != nil {
 		return SortedEntry{}, err
 	}
-	kvPos, err := db.Core.Length()
+	tag := TagKVPair
+	if db.Header.Streaming() {
+		tag = TagSortedKVPair
+	}
+	kvSlot, err := db.writeKvPair(tag, KeyValuePair{ValueSlot: Slot{}, KeySlot: keySlot, Hash: make([]byte, db.Header.HashSize)})
 	if err != nil {
 		return SortedEntry{}, err
 	}
-	kvPair := KeyValuePair{ValueSlot: Slot{}, KeySlot: keySlot, Hash: make([]byte, db.Header.HashSize)}
-	if err := db.Core.SeekTo(kvPos); err != nil {
-		return SortedEntry{}, err
-	}
-	if err := db.Core.Write(kvPair.ToBytes()); err != nil {
-		return SortedEntry{}, err
-	}
-	return SortedEntry{KvSlot: Slot{Value: kvPos, Tag: TagKVPair}, KeySlot: keySlot, ValuePosition: kvPos + int64(db.Header.HashSize) + SlotLength}, nil
+	return SortedEntry{KvSlot: kvSlot, KeySlot: keySlot}, nil
 }
 
 // insert key (or locate it for replacement) within the subtree at nodePtr,
 // path-copying nodes and maintaining separators + counts. the caller writes the value
-// at the returned ValuePosition.
+// of the returned entry.
 func (db *Database) sortedPut(nodePtr int64, key []byte) (SortedInsertResult, error) {
 	node, err := db.readSortedNode(nodePtr)
 	if err != nil {
@@ -2350,32 +3095,22 @@ func (db *Database) sortedPut(nodePtr int64, key []byte) (SortedInsertResult, er
 			// belongs to a past moment
 			leaf := node
 			kvSlot := node.Entries[idx]
-			var valuePosition int64
-			if db.btreeReusable(kvSlot.Value) {
-				valuePosition = kvSlot.Value + int64(db.Header.HashSize) + SlotLength
-			} else {
+			if !db.btreeReusable(kvSlot.Value) {
 				kv, err := db.readKvPair(kvSlot)
 				if err != nil {
 					return SortedInsertResult{}, err
 				}
-				newKvPos, err := db.Core.Length()
+				kvSlot, err = db.writeKvPair(kvSlot.Tag, kv)
 				if err != nil {
 					return SortedInsertResult{}, err
 				}
-				if err := db.Core.SeekTo(newKvPos); err != nil {
-					return SortedInsertResult{}, err
-				}
-				if err := db.Core.Write(kv.ToBytes()); err != nil {
-					return SortedInsertResult{}, err
-				}
-				leaf.Entries[idx] = Slot{Value: newKvPos, Tag: TagKVPair}
-				valuePosition = newKvPos + int64(db.Header.HashSize) + SlotLength
+				leaf.Entries[idx] = kvSlot
 			}
 			ptr, err := db.sortedWriteNode(leaf, nodePtr)
 			if err != nil {
 				return SortedInsertResult{}, err
 			}
-			return SortedInsertResult{NodePtr: ptr, Count: int64(node.Num), ValuePosition: valuePosition, Added: false}, nil
+			return SortedInsertResult{NodePtr: ptr, Count: int64(node.Num), KvSlot: kvSlot, Added: false}, nil
 		}
 
 		// insert a new entry at idx
@@ -2396,7 +3131,7 @@ func (db *Database) sortedPut(nodePtr int64, key []byte) (SortedInsertResult, er
 			if err != nil {
 				return SortedInsertResult{}, err
 			}
-			return SortedInsertResult{NodePtr: ptr, Count: int64(total), ValuePosition: entry.ValuePosition, Added: true}, nil
+			return SortedInsertResult{NodePtr: ptr, Count: int64(total), KvSlot: entry.KvSlot, Added: true}, nil
 		}
 
 		// overflow: split into two leaves; the new sibling's separator is the key of its
@@ -2420,7 +3155,7 @@ func (db *Database) sortedPut(nodePtr int64, key []byte) (SortedInsertResult, er
 		if err != nil {
 			return SortedInsertResult{}, err
 		}
-		return SortedInsertResult{NodePtr: leftPtr, Count: int64(leftN), ValuePosition: entry.ValuePosition, Added: true, Split: &SortedSplit{NodePtr: rightPtr, Count: int64(rightN), Separator: separator}}, nil
+		return SortedInsertResult{NodePtr: leftPtr, Count: int64(leftN), KvSlot: entry.KvSlot, Added: true, Split: &SortedSplit{NodePtr: rightPtr, Count: int64(rightN), Separator: separator}}, nil
 	case BTreeKindBranch:
 		i := 0
 		for i+1 < node.Num {
@@ -2472,7 +3207,7 @@ func (db *Database) sortedPut(nodePtr int64, key []byte) (SortedInsertResult, er
 			if err != nil {
 				return SortedInsertResult{}, err
 			}
-			return SortedInsertResult{NodePtr: ptr, Count: branch.SubtreeCount(), ValuePosition: child.ValuePosition, Added: child.Added}, nil
+			return SortedInsertResult{NodePtr: ptr, Count: branch.SubtreeCount(), KvSlot: child.KvSlot, Added: child.Added}, nil
 		}
 
 		// overflow: split into two branches; the new sibling's separator is the smallest
@@ -2496,7 +3231,7 @@ func (db *Database) sortedPut(nodePtr int64, key []byte) (SortedInsertResult, er
 		if err != nil {
 			return SortedInsertResult{}, err
 		}
-		return SortedInsertResult{NodePtr: leftPtr, Count: left.SubtreeCount(), ValuePosition: child.ValuePosition, Added: child.Added, Split: &SortedSplit{NodePtr: rightPtr, Count: right.SubtreeCount(), Separator: separator}}, nil
+		return SortedInsertResult{NodePtr: leftPtr, Count: left.SubtreeCount(), KvSlot: child.KvSlot, Added: child.Added, Split: &SortedSplit{NodePtr: rightPtr, Count: right.SubtreeCount(), Separator: separator}}, nil
 	}
 	return SortedInsertResult{}, ErrUnreachable
 }
@@ -2586,21 +3321,21 @@ func (db *Database) sortedGrowRoot(result SortedInsertResult) (int64, error) {
 	return result.NodePtr, nil
 }
 
-// turn a located/inserted kv_pair (at kvPos) into the slot for the requested target.
-// only the value is writeable (that is how put works); the key and the kv_pair pointer
-// are immutable, so they are returned with no writeable position.
-func (db *Database) sortedTargetSlot(kvPos int64, target SortedMapGetTarget) (SlotPointer, error) {
-	kv, err := db.readKvPair(Slot{Value: kvPos, Tag: TagKVPair})
+// turn a located/inserted entry into the slot for the requested target. only
+// the value is writeable (that is how put works); the key and the entry
+// pointer are immutable, so they are returned with no writeable position.
+func (db *Database) sortedTargetSlot(kvSlot Slot, target SortedMapGetTarget) (SlotPointer, error) {
+	kv, err := db.readKvPair(kvSlot)
 	if err != nil {
 		return SlotPointer{}, err
 	}
 	switch target.(type) {
 	case SortedMapGetKVPair:
-		return SlotPointer{Position: nil, Slot: Slot{Value: kvPos, Tag: TagKVPair}}, nil
+		return SlotPointer{Position: nil, Slot: kvSlot}, nil
 	case SortedMapGetKey:
 		return SlotPointer{Position: nil, Slot: kv.KeySlot}, nil
 	case SortedMapGetValue:
-		pos := kvPos + int64(db.Header.HashSize) + SlotLength
+		pos := kvSlot.Value + db.kvKeyOffset(kvSlot.Tag) + SlotLength
 		return SlotPointer{Position: &pos, Slot: kv.ValueSlot}, nil
 	default:
 		return SlotPointer{}, ErrUnexpectedTag
@@ -2671,7 +3406,9 @@ func (c *compactor) remapSlot(slot Slot) (Slot, error) {
 	case TagCountedHashMap, TagCountedHashSet:
 		newOffset, err = c.visitObject(slot.Value, IndexBlockSize+8, c.populateCountedHashMapOrSet)
 	case TagKVPair:
-		newOffset, err = c.visitObject(slot.Value, KeyValuePairLength(int(c.hashSize)), c.populateKvPair)
+		newOffset, err = c.visitObject(slot.Value, KeyValuePairLength(int(c.hashSize)), c.kvPairPopulator(TagKVPair))
+	case TagSortedKVPair:
+		newOffset, err = c.visitObject(slot.Value, SortedKeyValuePairLength, c.kvPairPopulator(TagSortedKVPair))
 	case TagSortedMap, TagSortedSet:
 		newOffset, err = c.visitObject(slot.Value, BTreeHeaderLength, c.populateSortedMap)
 	default:
@@ -3252,32 +3989,32 @@ func (c *compactor) populateHashMapOrSetCounted(sourceOffset, targetOffset int64
 	return nil
 }
 
-func (c *compactor) populateKvPair(sourceOffset, targetOffset int64) error {
+func (c *compactor) kvPairPopulator(tag Tag) objectPopulator {
+	return func(sourceOffset, targetOffset int64) error {
+		return c.populateKvPair(sourceOffset, targetOffset, tag)
+	}
+}
+
+func (c *compactor) populateKvPair(sourceOffset, targetOffset int64, tag Tag) error {
 	if err := c.sourceCore.SeekTo(sourceOffset); err != nil {
 		return err
 	}
-	kvPairBytes := make([]byte, KeyValuePairLength(int(c.hashSize)))
-	if err := c.sourceCore.Read(kvPairBytes); err != nil {
-		return err
-	}
-	kvPair := KeyValuePairFromBytes(kvPairBytes, int(c.hashSize))
-
-	remappedKey, err := c.remapSlot(kvPair.KeySlot)
-	if err != nil {
-		return err
-	}
-	remappedValue, err := c.remapSlot(kvPair.ValueSlot)
+	kvPair, err := decodeKvPair(c.sourceCore, tag, int(c.hashSize))
 	if err != nil {
 		return err
 	}
 
+	// remap KeySlot and ValueSlot, and write the pair in the same form
+	kvPair.KeySlot, err = c.remapSlot(kvPair.KeySlot)
+	if err != nil {
+		return err
+	}
+	kvPair.ValueSlot, err = c.remapSlot(kvPair.ValueSlot)
+	if err != nil {
+		return err
+	}
 	if err := c.targetCore.SeekTo(targetOffset); err != nil {
 		return err
 	}
-	newKvPair := KeyValuePair{ValueSlot: remappedValue, KeySlot: remappedKey, Hash: kvPair.Hash}
-	if err := c.targetCore.Write(newKvPair.ToBytes()); err != nil {
-		return err
-	}
-
-	return nil
+	return encodeKvPair(c.targetCore, tag, kvPair)
 }

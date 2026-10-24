@@ -12,7 +12,11 @@ type ReadSortedMap struct {
 }
 
 func NewReadSortedMap(cursor *ReadCursor) (*ReadSortedMap, error) {
-	switch cursor.SlotPtr.Slot.Tag {
+	slotPtr, err := cursor.resolved()
+	if err != nil {
+		return nil, err
+	}
+	switch slotPtr.Slot.Tag {
 	case TagNone, TagSortedMap, TagSortedSet:
 		return &ReadSortedMap{Cursor: cursor}, nil
 	default:
@@ -20,7 +24,7 @@ func NewReadSortedMap(cursor *ReadCursor) (*ReadSortedMap, error) {
 	}
 }
 
-func (m *ReadSortedMap) Slot() Slot {
+func (m *ReadSortedMap) Slot() (Slot, error) {
 	return m.Cursor.Slot()
 }
 
@@ -101,10 +105,14 @@ func (m *ReadSortedMap) GetIndexKeyValuePair(index int64) (*ReadKVPairCursor, er
 
 // RankByBytes returns the number of keys strictly less than key
 func (m *ReadSortedMap) RankByBytes(key []byte) (int64, error) {
-	if m.Cursor.SlotPtr.Slot.Tag == TagNone {
+	slotPtr, err := m.Cursor.resolved()
+	if err != nil {
+		return 0, err
+	}
+	if slotPtr.Slot.Tag == TagNone {
 		return 0, nil
 	}
-	if err := m.Cursor.DB.Core.SeekTo(m.Cursor.SlotPtr.Slot.Value); err != nil {
+	if err := m.Cursor.DB.Core.SeekTo(slotPtr.Slot.Value); err != nil {
 		return 0, err
 	}
 	var headerBytes [BTreeHeaderLength]byte

@@ -1,53 +1,39 @@
 package xitdb
 
 import (
-	"crypto/sha256"
 	"encoding/binary"
-	"errors"
-	"os"
 )
 
-// stores compaction offsets in a separate scratch database without retaining
-// the mappings in memory. the supplied file is truncated on construction and
-// reset, and is closed on close or failed construction. the caller deletes it.
+// stores compaction offsets in a hash map in a separate scratch database
+// (typically a temporary file), without retaining the mappings in memory.
+// create it with the cursor that Database.RunContext gives you on the
+// scratch database, and run the compaction inside that same transaction,
+// so the offsets aren't each committed separately. the scratch database's
+// hash size must be at least 8 bytes.
 type FileOffsetMap struct {
-	core *fileOffsetCore
-	db   *Database
+	m *WriteHashMap
 }
 
-type fileOffsetCore struct {
-	*CoreFile
-}
-
-func (c *fileOffsetCore) Sync() error {
-	// scratch mappings do not need crash durability
-	return nil
-}
-
-func NewFileOffsetMap(file *os.File) (*FileOffsetMap, error) {
-	m := &FileOffsetMap{core: &fileOffsetCore{NewCoreFile(file)}}
-	if err := m.Reset(); err != nil {
-		return nil, errors.Join(err, m.Close())
+func NewFileOffsetMap(cursor *WriteCursor) (*FileOffsetMap, error) {
+	m, err := NewWriteHashMap(cursor)
+	if err != nil {
+		return nil, err
 	}
-	return m, nil
+	return &FileOffsetMap{m: m}, nil
 }
 
 func (m *FileOffsetMap) Reset() error {
-	if err := m.core.SetLength(0); err != nil {
+	cursor := m.m.writeCursor
+	if err := cursor.Write(nil); err != nil {
 		return err
 	}
 	var err error
-	m.db, err = NewDatabase(m.core, Hasher{Hash: sha256.New})
+	m.m, err = NewWriteHashMap(cursor)
 	return err
 }
 
 func (m *FileOffsetMap) Get(sourceOffset int64) (int64, bool, error) {
-	index, err := NewReadHashMap(m.db.RootCursor().ReadCursor)
-	if err != nil {
-		return 0, false, err
-	}
-	key := fileOffsetKey(sourceOffset)
-	cursor, err := index.GetCursorByHash(key[:])
+	cursor, err := m.m.GetCursorByHash(m.key(sourceOffset))
 	if err != nil {
 		return 0, false, err
 	}
@@ -62,21 +48,12 @@ func (m *FileOffsetMap) Get(sourceOffset int64) (int64, bool, error) {
 }
 
 func (m *FileOffsetMap) Put(sourceOffset, targetOffset int64) error {
-	index, err := NewWriteHashMap(m.db.RootCursor())
-	if err != nil {
-		return err
-	}
-	key := fileOffsetKey(sourceOffset)
-	return index.PutByHash(key[:], NewUint(uint64(targetOffset)))
+	return m.m.PutByHash(m.key(sourceOffset), NewUint(uint64(targetOffset)))
 }
 
-func fileOffsetKey(offset int64) [sha256.Size]byte {
+func (m *FileOffsetMap) key(offset int64) []byte {
 	// encode the offset directly rather than hashing it, preserving exact keys
-	var key [sha256.Size]byte
-	binary.BigEndian.PutUint64(key[sha256.Size-8:], uint64(offset))
+	key := make([]byte, m.m.Cursor.DB.Header.HashSize)
+	binary.BigEndian.PutUint64(key[len(key)-8:], uint64(offset))
 	return key
-}
-
-func (m *FileOffsetMap) Close() error {
-	return m.core.Close()
 }

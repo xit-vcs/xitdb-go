@@ -9,6 +9,8 @@ type Hasher struct {
 	// returns a new, independent hash for each call
 	Hash func() hash.Hash
 	ID   uint32
+	// the file ID of a new database. if 0, a random one is used.
+	FileID uint64
 }
 
 func BytesToID(name [4]byte) uint32 {
