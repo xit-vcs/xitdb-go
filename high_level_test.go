@@ -37,97 +37,49 @@ func sha1HasherWithID() Hasher {
 	}
 }
 
-// creates a database. if legacy is true and the storage is empty, it first
-// writes a version 0 header, which is all an empty legacy database contains.
-func initDb(t *testing.T, core Core, hasher Hasher, legacy bool) (*Database, error) {
-	t.Helper()
-	if legacy {
-		length, err := core.Length()
-		if err != nil {
-			return nil, err
-		}
-		if length == 0 {
-			header := Header{
-				HashID:      hasher.ID,
-				HashSize:    uint16(hasher.Hash().Size()),
-				Version:     0,
-				Tag:         TagNone,
-				MagicNumber: MagicNumber,
-			}
-			if err := core.SeekTo(0); err != nil {
-				return nil, err
-			}
-			if err := header.Write(core); err != nil {
-				return nil, err
-			}
-			if err := core.Flush(); err != nil {
-				return nil, err
-			}
-		}
-	}
-	db, err := NewDatabase(core, hasher)
-	if err != nil {
-		return nil, err
-	}
-	expectedVersion := Version
-	if legacy {
-		expectedVersion = 0
-	}
-	assertEqual(t, expectedVersion, db.Header.Version)
-	return db, nil
-}
-
 func TestHighLevelApi(t *testing.T) {
-	for _, legacy := range []bool{true, false} {
-		// CoreMemory
-		{
-			core := NewCoreMemory()
-			hasher := sha1Hasher()
-			testHighLevelApi(t, core, hasher, nil, legacy)
+	// CoreMemory
+	{
+		core := NewCoreMemory()
+		hasher := sha1Hasher()
+		testHighLevelApi(t, core, hasher, nil)
+	}
+
+	// CoreFile
+	{
+		f, err := os.CreateTemp("", "database")
+		if err != nil {
+			t.Fatal(err)
 		}
+		defer os.Remove(f.Name())
 
-		// CoreFile
-		{
-			f, err := os.CreateTemp("", "database")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer os.Remove(f.Name())
+		core := NewCoreFile(f)
+		defer core.Close()
+		hasher := sha1Hasher()
+		testHighLevelApi(t, core, hasher, f)
+	}
 
-			core := NewCoreFile(f)
-			defer core.Close()
-			hasher := sha1Hasher()
-			testHighLevelApi(t, core, hasher, f, legacy)
+	// CoreBufferedFile
+	{
+		f, err := os.CreateTemp("", "database")
+		if err != nil {
+			t.Fatal(err)
 		}
+		defer os.Remove(f.Name())
 
-		// CoreBufferedFile
-		{
-			f, err := os.CreateTemp("", "database")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer os.Remove(f.Name())
-
-			core := NewCoreBufferedFileWithSize(f, 1024)
-			defer core.Close()
-			hasher := sha1Hasher()
-			testHighLevelApi(t, core, hasher, f, legacy)
-		}
+		core := NewCoreBufferedFileWithSize(f, 1024)
+		defer core.Close()
+		hasher := sha1Hasher()
+		testHighLevelApi(t, core, hasher, f)
 	}
 }
 
 func TestNotUsingArrayListAtTopLevel(t *testing.T) {
-	for _, legacy := range []bool{true, false} {
-		testNotUsingArrayListAtTopLevel(t, legacy)
-	}
-}
-
-func testNotUsingArrayListAtTopLevel(t *testing.T, legacy bool) {
 	// hash map
 	{
 		core := NewCoreMemory()
 		hasher := sha1Hasher()
-		db, err := initDb(t, core, hasher, legacy)
+		db, err := NewDatabase(core, hasher)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -143,70 +95,37 @@ func testNotUsingArrayListAtTopLevel(t *testing.T, legacy bool) {
 			t.Fatal(err)
 		}
 
-		if legacy {
-			// init inner map
-			{
-				innerMapCursor, err := m.PutCursor("inner-map")
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, err := NewWriteHashMap(innerMapCursor); err != nil {
-					t.Fatal(err)
-				}
-			}
-
-			// re-init inner map
-			// since the top-level type isn't an arraylist, there is no concept of
-			// a transaction, so this does not perform a copy of the root node
-			{
-				innerMapCursor, err := m.PutCursor("inner-map")
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, err := NewWriteHashMap(innerMapCursor); err != nil {
-					t.Fatal(err)
-				}
-			}
-		} else {
-			// in the newest version every write to the root is a transaction,
-			// so a nested cursor can't be written to after it was returned
-			innerMapCursor, err := m.PutCursor("inner-map")
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = NewWriteHashMap(innerMapCursor)
-			assertEqual(t, error(ErrExpiredTransaction), err)
+		// every write to the root is a transaction, so a nested
+		// cursor can't be written to after it was returned
+		innerMapCursor, err := m.PutCursor("inner-map")
+		if err != nil {
+			t.Fatal(err)
 		}
+		_, err = NewWriteHashMap(innerMapCursor)
+		assertEqual(t, error(ErrExpiredTransaction), err)
 	}
 
-	// linked array list is only allowed at the top level in the newest version
+	// linked array list
 	{
 		core := NewCoreMemory()
 		hasher := sha1Hasher()
-		db, err := initDb(t, core, hasher, legacy)
+		db, err := NewDatabase(core, hasher)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		if legacy {
-			_, err = NewWriteLinkedArrayList(db.RootCursor())
-			if err == nil {
-				t.Fatal("expected error for linked array list at top level")
-			}
-		} else {
-			list, err := NewWriteLinkedArrayList(db.RootCursor())
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := list.Append(NewUint(1)); err != nil {
-				t.Fatal(err)
-			}
-			count, err := list.Count()
-			if err != nil {
-				t.Fatal(err)
-			}
-			assertEqual(t, int64(1), count)
+		list, err := NewWriteLinkedArrayList(db.RootCursor())
+		if err != nil {
+			t.Fatal(err)
 		}
+		if err := list.Append(NewUint(1)); err != nil {
+			t.Fatal(err)
+		}
+		count, err := list.Count()
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertEqual(t, int64(1), count)
 	}
 }
 
@@ -742,7 +661,7 @@ func TestMultithreading(t *testing.T) {
 	<-done2
 }
 
-func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File, legacy bool) {
+func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File) {
 	t.Helper()
 	maxRead := int64(1024)
 
@@ -750,7 +669,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 	if err := core.SetLength(0); err != nil {
 		t.Fatal(err)
 	}
-	db, err := initDb(t, core, hasher, legacy)
+	db, err := NewDatabase(core, hasher)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1737,7 +1656,7 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 			}
 		}
 
-		db, err = initDb(t, core, hasher, legacy)
+		db, err = NewDatabase(core, hasher)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2264,94 +2183,54 @@ func TestCompaction(t *testing.T) {
 	maxRead := int64(1024)
 	offsetMap := make(MemoryOffsetMap)
 
-	for _, legacy := range []bool{true, false} {
-		// memory
-		{
-			sourceCore := NewCoreMemory()
-			targetCore := NewCoreMemory()
-			hasher := sha1Hasher()
-			testCompaction(t, sourceCore, targetCore, hasher, false, maxRead, offsetMap, legacy)
-		}
-
-		// file
-		{
-			sf, err := os.CreateTemp("", "compact_source")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer os.Remove(sf.Name())
-			tf, err := os.CreateTemp("", "compact_target")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer os.Remove(tf.Name())
-
-			sourceCore := NewCoreFile(sf)
-			targetCore := NewCoreFile(tf)
-			defer sourceCore.Close()
-			defer targetCore.Close()
-			hasher := sha1Hasher()
-			testCompaction(t, sourceCore, targetCore, hasher, true, maxRead, offsetMap, legacy)
-		}
-
-		// buffered file
-		{
-			sf, err := os.CreateTemp("", "compact_source")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer os.Remove(sf.Name())
-			tf, err := os.CreateTemp("", "compact_target")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer os.Remove(tf.Name())
-
-			sourceCore := NewCoreBufferedFile(sf)
-			targetCore := NewCoreBufferedFile(tf)
-			defer sourceCore.Close()
-			defer targetCore.Close()
-			hasher := sha1Hasher()
-			testCompaction(t, sourceCore, targetCore, hasher, true, maxRead, offsetMap, legacy)
-		}
+	// memory
+	{
+		sourceCore := NewCoreMemory()
+		targetCore := NewCoreMemory()
+		hasher := sha1Hasher()
+		testCompaction(t, sourceCore, targetCore, hasher, false, maxRead, offsetMap)
 	}
 
-	// compacting migrates a legacy database to the newest version
+	// file
 	{
-		check := func(err error) {
-			t.Helper()
-			if err != nil {
-				t.Fatal(err)
-			}
+		sf, err := os.CreateTemp("", "compact_source")
+		if err != nil {
+			t.Fatal(err)
 		}
+		defer os.Remove(sf.Name())
+		tf, err := os.CreateTemp("", "compact_target")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(tf.Name())
 
-		source, err := initDb(t, NewCoreMemory(), sha1Hasher(), true)
-		check(err)
-		assertEqual(t, uint16(0), source.Header.Version)
-		history, err := NewWriteArrayList(source.RootCursor())
-		check(err)
-		check(history.Append(NewUint(1)))
-		check(history.Append(NewUint(2)))
+		sourceCore := NewCoreFile(sf)
+		targetCore := NewCoreFile(tf)
+		defer sourceCore.Close()
+		defer targetCore.Close()
+		hasher := sha1Hasher()
+		testCompaction(t, sourceCore, targetCore, hasher, true, maxRead, offsetMap)
+	}
 
-		target, err := source.Compact(NewCoreMemory(), offsetMap)
-		check(err)
-		assertEqual(t, true, target.Header.Streaming())
-		assertEqual(t, Version, target.Header.Version)
-		targetHistory, err := NewReadArrayList(target.RootCursor().ReadCursor)
-		check(err)
-		count, err := targetHistory.Count()
-		check(err)
-		assertEqual(t, int64(1), count)
-		lastCursor, err := targetHistory.GetCursor(-1)
-		check(err)
-		last, err := lastCursor.ReadUint()
-		check(err)
-		assertEqual(t, uint64(2), last)
+	// buffered file
+	{
+		sf, err := os.CreateTemp("", "compact_source")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(sf.Name())
+		tf, err := os.CreateTemp("", "compact_target")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(tf.Name())
 
-		// and compacting a database in the newest version keeps it there
-		compacted, err := target.Compact(NewCoreMemory(), offsetMap)
-		check(err)
-		assertEqual(t, Version, compacted.Header.Version)
+		sourceCore := NewCoreBufferedFile(sf)
+		targetCore := NewCoreBufferedFile(tf)
+		defer sourceCore.Close()
+		defer targetCore.Close()
+		hasher := sha1Hasher()
+		testCompaction(t, sourceCore, targetCore, hasher, true, maxRead, offsetMap)
 	}
 }
 
@@ -2393,17 +2272,15 @@ func TestCompactionWithDiskBackedOffsetsMap(t *testing.T) {
 		// exercise the same data types, cycles, sharing, and reopening checks
 		// as the in-memory offsets map, reusing the scratch map between runs.
 		// reusing it must discard offsets from previous compactions.
-		for _, legacy := range []bool{true, false} {
-			if err := offsetMap.Put(0, 123); err != nil {
-				return err
-			}
-			testCompaction(t, sourceCore, targetCore, sha1Hasher(), true, 1024, offsetMap, legacy)
-			_, found, err := offsetMap.Get(0)
-			if err != nil {
-				return err
-			}
-			assertEqual(t, false, found)
+		if err := offsetMap.Put(0, 123); err != nil {
+			return err
 		}
+		testCompaction(t, sourceCore, targetCore, sha1Hasher(), true, 1024, offsetMap)
+		_, found, err := offsetMap.Get(0)
+		if err != nil {
+			return err
+		}
+		assertEqual(t, false, found)
 		return nil
 	})
 	if err != nil {
@@ -2411,14 +2288,14 @@ func TestCompactionWithDiskBackedOffsetsMap(t *testing.T) {
 	}
 }
 
-func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, isFile bool, maxRead int64, offsetMap OffsetMap, legacy bool) {
+func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, isFile bool, maxRead int64, offsetMap OffsetMap) {
 	t.Helper()
 
 	// empty DB compaction
 	{
 		mustSetLength(t, sourceCore, 0)
 		mustSetLength(t, targetCore, 0)
-		source, err := initDb(t, sourceCore, hasher, legacy)
+		source, err := NewDatabase(sourceCore, hasher)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2426,14 +2303,14 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 		if err != nil {
 			t.Fatal(err)
 		}
-		assertEqual(t, TagNone, compacted.Header.Tag)
+		assertEqual(t, true, mustSlot(t, compacted.RootCursor()).Empty())
 	}
 
 	// basic compaction with various data types
 	{
 		mustSetLength(t, sourceCore, 0)
 		mustSetLength(t, targetCore, 0)
-		source, err := initDb(t, sourceCore, hasher, legacy)
+		source, err := NewDatabase(sourceCore, hasher)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -3049,7 +2926,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 	{
 		mustSetLength(t, sourceCore, 0)
 		mustSetLength(t, targetCore, 0)
-		source, err := initDb(t, sourceCore, hasher, legacy)
+		source, err := NewDatabase(sourceCore, hasher)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -3159,7 +3036,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 		{
 			mustSetLength(t, sourceCore, 0)
 			mustSetLength(t, targetCore, 0)
-			source, err := initDb(t, sourceCore, hasher, legacy)
+			source, err := NewDatabase(sourceCore, hasher)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3240,7 +3117,7 @@ func testCompaction(t *testing.T, sourceCore, targetCore Core, hasher Hasher, is
 		{
 			mustSetLength(t, sourceCore, 0)
 			mustSetLength(t, targetCore, 0)
-			source, err := initDb(t, sourceCore, hasher, legacy)
+			source, err := NewDatabase(sourceCore, hasher)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3371,43 +3248,41 @@ func itoa(i int) string {
 }
 
 func TestSortedMap(t *testing.T) {
-	for _, legacy := range []bool{true, false} {
-		// CoreMemory
-		{
-			testSortedMap(t, NewCoreMemory(), sha1Hasher(), legacy)
+	// CoreMemory
+	{
+		testSortedMap(t, NewCoreMemory(), sha1Hasher())
+	}
+	// CoreFile
+	{
+		f, err := os.CreateTemp("", "database")
+		if err != nil {
+			t.Fatal(err)
 		}
-		// CoreFile
-		{
-			f, err := os.CreateTemp("", "database")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer os.Remove(f.Name())
-			core := NewCoreFile(f)
-			defer core.Close()
-			testSortedMap(t, core, sha1Hasher(), legacy)
+		defer os.Remove(f.Name())
+		core := NewCoreFile(f)
+		defer core.Close()
+		testSortedMap(t, core, sha1Hasher())
+	}
+	// CoreBufferedFile
+	{
+		f, err := os.CreateTemp("", "database")
+		if err != nil {
+			t.Fatal(err)
 		}
-		// CoreBufferedFile
-		{
-			f, err := os.CreateTemp("", "database")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer os.Remove(f.Name())
-			core := NewCoreBufferedFileWithSize(f, 1024)
-			defer core.Close()
-			testSortedMap(t, core, sha1Hasher(), legacy)
-		}
+		defer os.Remove(f.Name())
+		core := NewCoreBufferedFileWithSize(f, 1024)
+		defer core.Close()
+		testSortedMap(t, core, sha1Hasher())
 	}
 }
 
-func testSortedMap(t *testing.T, core Core, hasher Hasher, legacy bool) {
+func testSortedMap(t *testing.T, core Core, hasher Hasher) {
 	t.Helper()
 	maxRead := int64(1024)
 	if err := core.SetLength(0); err != nil {
 		t.Fatal(err)
 	}
-	db, err := initDb(t, core, hasher, legacy)
+	db, err := NewDatabase(core, hasher)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3831,16 +3706,12 @@ func testSortedMap(t *testing.T, core Core, hasher Hasher, legacy bool) {
 		}
 		assertEqual(t, "k0001", string(b))
 
-		// entries have no hash, except in version 0 databases
+		// entries have no hash
 		entry, err := m.Cursor.ReadPathSlot([]PathPart{SortedMapGetPart{Target: SortedMapGetKVPair{Key: []byte("k0001")}}})
 		if err != nil {
 			t.Fatal(err)
 		}
-		expectedTag := TagSortedKVPair
-		if legacy {
-			expectedTag = TagKVPair
-		}
-		assertEqual(t, expectedTag, entry.Tag)
+		assertEqual(t, TagSortedKVPair, entry.Tag)
 	}
 
 	// a second moment that inherits and mutates the map must not disturb the first
@@ -3949,42 +3820,40 @@ func testSortedMap(t *testing.T, core Core, hasher Hasher, legacy bool) {
 }
 
 func TestAllFrom(t *testing.T) {
-	for _, legacy := range []bool{true, false} {
-		// CoreMemory
-		{
-			testAllFrom(t, NewCoreMemory(), sha1Hasher(), legacy)
+	// CoreMemory
+	{
+		testAllFrom(t, NewCoreMemory(), sha1Hasher())
+	}
+	// CoreFile
+	{
+		f, err := os.CreateTemp("", "database")
+		if err != nil {
+			t.Fatal(err)
 		}
-		// CoreFile
-		{
-			f, err := os.CreateTemp("", "database")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer os.Remove(f.Name())
-			core := NewCoreFile(f)
-			defer core.Close()
-			testAllFrom(t, core, sha1Hasher(), legacy)
+		defer os.Remove(f.Name())
+		core := NewCoreFile(f)
+		defer core.Close()
+		testAllFrom(t, core, sha1Hasher())
+	}
+	// CoreBufferedFile
+	{
+		f, err := os.CreateTemp("", "database")
+		if err != nil {
+			t.Fatal(err)
 		}
-		// CoreBufferedFile
-		{
-			f, err := os.CreateTemp("", "database")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer os.Remove(f.Name())
-			core := NewCoreBufferedFileWithSize(f, 1024)
-			defer core.Close()
-			testAllFrom(t, core, sha1Hasher(), legacy)
-		}
+		defer os.Remove(f.Name())
+		core := NewCoreBufferedFileWithSize(f, 1024)
+		defer core.Close()
+		testAllFrom(t, core, sha1Hasher())
 	}
 }
 
-func testAllFrom(t *testing.T, core Core, hasher Hasher, legacy bool) {
+func testAllFrom(t *testing.T, core Core, hasher Hasher) {
 	t.Helper()
 	if err := core.SetLength(0); err != nil {
 		t.Fatal(err)
 	}
-	db, err := initDb(t, core, hasher, legacy)
+	db, err := NewDatabase(core, hasher)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4139,13 +4008,13 @@ func testAllFrom(t *testing.T, core Core, hasher Hasher, legacy bool) {
 	}
 }
 
-func TestStreaming(t *testing.T) {
+func TestReplication(t *testing.T) {
 	// CoreMemory
 	{
 		sourceCore := NewCoreMemory()
 		replicaCore := NewCoreMemory()
-		testStreaming(t, sourceCore, replicaCore)
-		testStreamingRoots(t, sourceCore, replicaCore)
+		testReplication(t, sourceCore, replicaCore)
+		testRoots(t, sourceCore, replicaCore)
 	}
 
 	// CoreFile
@@ -4165,8 +4034,8 @@ func TestStreaming(t *testing.T) {
 		defer sourceCore.Close()
 		replicaCore := NewCoreFile(rf)
 		defer replicaCore.Close()
-		testStreaming(t, sourceCore, replicaCore)
-		testStreamingRoots(t, sourceCore, replicaCore)
+		testReplication(t, sourceCore, replicaCore)
+		testRoots(t, sourceCore, replicaCore)
 	}
 
 	// CoreBufferedFile
@@ -4186,8 +4055,8 @@ func TestStreaming(t *testing.T) {
 		defer sourceCore.Close()
 		replicaCore := NewCoreBufferedFileWithSize(rf, 1024)
 		defer replicaCore.Close()
-		testStreaming(t, sourceCore, replicaCore)
-		testStreamingRoots(t, sourceCore, replicaCore)
+		testReplication(t, sourceCore, replicaCore)
+		testRoots(t, sourceCore, replicaCore)
 	}
 
 	testReplicaOfOtherFile(t)
@@ -4325,10 +4194,10 @@ func replicate(t *testing.T, source, replica *Database) {
 
 // checks that no committed byte has changed since committed was read,
 // except the root header (the root slot and file size after the database
-// header and file ID). then replicates and checks that the replica is identical.
+// header). then replicates and checks that the replica is identical.
 func expectAppendOnlyAndReplicate(t *testing.T, source, replica *Database, committed *[]byte) {
 	t.Helper()
-	rootHeaderStart := HeaderLength + 8
+	rootHeaderStart := HeaderLength
 	rootHeaderEnd := rootHeaderStart + 17
 	{
 		current := readCommittedBytes(t, source, 0)
@@ -4360,7 +4229,7 @@ func expectSameCommittedBytes(t *testing.T, source, replica *Database) {
 	}
 }
 
-func testStreaming(t *testing.T, sourceCore, replicaCore Core) {
+func testReplication(t *testing.T, sourceCore, replicaCore Core) {
 	t.Helper()
 	check := func(err error) {
 		t.Helper()
@@ -4418,8 +4287,8 @@ func testStreaming(t *testing.T, sourceCore, replicaCore Core) {
 	replica, err := NewDatabase(replicaCore, hasher)
 	check(err)
 
-	// a new streaming database is its header, its file ID, its root header, and
-	// the trailer for its empty root: the slot (9 zero bytes), the commit ID (0 for
+	// a new database is its header (which ends with its file ID), its root
+	// header, and the trailer for its empty root: the slot (9 zero bytes), the commit ID (0 for
 	// the first commit), then the CRC-64/XZ of the file ID, the trailer's position
 	// (37), the slot, and the commit ID
 	{
@@ -4444,11 +4313,7 @@ func testStreaming(t *testing.T, sourceCore, replicaCore Core) {
 	replicate(t, source, replica)
 	expectSameCommittedBytes(t, source, replica)
 
-	// older builds can't open streaming databases
-	assertEqual(t, uint16(1), source.Header.Version)
-
-	// the root slot carries the type of the top-level data
-	assertEqual(t, TagNone, source.Header.Tag)
+	assertEqual(t, Version, source.Header.Version)
 
 	history, err := NewWriteArrayList(source.RootCursor())
 	check(err)
@@ -4562,8 +4427,8 @@ func testStreaming(t *testing.T, sourceCore, replicaCore Core) {
 	}
 }
 
-// in streaming mode, the root can be any type, not just an array list
-func testStreamingRoots(t *testing.T, sourceCore, replicaCore Core) {
+// the root can be any type, not just an array list
+func testRoots(t *testing.T, sourceCore, replicaCore Core) {
 	t.Helper()
 	check := func(err error) {
 		t.Helper()
@@ -4740,7 +4605,6 @@ func testStreamingRoots(t *testing.T, sourceCore, replicaCore Core) {
 		{
 			target, err := replica.Compact(NewCoreMemory(), make(MemoryOffsetMap))
 			check(err)
-			assertEqual(t, true, target.Header.Streaming())
 			assertEqual(t, true, mustCommittedSize(t, target) < mustCommittedSize(t, replica))
 
 			targetMap, err := NewReadHashMap(target.RootCursor().ReadCursor)
@@ -4919,28 +4783,5 @@ func testStreamingRoots(t *testing.T, sourceCore, replicaCore Core) {
 		_, err = NewWriteLinkedArrayList(db.RootCursor())
 		check(err)
 		assertEqual(t, size, mustCommittedSize(t, db))
-	}
-
-	// a legacy database whose root is a hash map can be compacted into a streaming one
-	{
-		mustSetLength(t, sourceCore, 0)
-		db, err := initDb(t, sourceCore, hasher, true)
-		check(err)
-		assertEqual(t, false, db.Header.Streaming())
-
-		m, err := NewWriteCountedHashMap(db.RootCursor())
-		check(err)
-		check(m.Put("foo", NewUint(1)))
-		check(m.Put("bar", NewUint(2)))
-
-		target, err := db.Compact(NewCoreMemory(), make(MemoryOffsetMap))
-		check(err)
-		assertEqual(t, true, target.Header.Streaming())
-		targetMap, err := NewReadCountedHashMap(target.RootCursor().ReadCursor)
-		check(err)
-		targetCount, err := targetMap.Count()
-		check(err)
-		assertEqual(t, int64(2), targetCount)
-		assertEqual(t, uint64(2), readUint(targetMap.GetCursor("bar")))
 	}
 }

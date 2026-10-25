@@ -11,12 +11,6 @@ import (
 )
 
 func TestFrozenWriters(t *testing.T) {
-	for _, legacy := range []bool{true, false} {
-		testFrozenWriters(t, legacy)
-	}
-}
-
-func testFrozenWriters(t *testing.T, legacy bool) {
 	check := func(err error) {
 		t.Helper()
 		if err != nil {
@@ -33,7 +27,7 @@ func testFrozenWriters(t *testing.T, legacy bool) {
 		check(err)
 		return value
 	}
-	db, err := initDb(t, NewCoreMemory(), sha1Hasher(), legacy)
+	db, err := NewDatabase(NewCoreMemory(), sha1Hasher())
 	check(err)
 	history, err := NewWriteArrayList(db.RootCursor())
 	check(err)
@@ -132,32 +126,22 @@ func testFrozenWriters(t *testing.T, legacy bool) {
 }
 
 func TestExpiredWriters(t *testing.T) {
-	for _, legacy := range []bool{true, false} {
-		testExpiredWriters(t, legacy)
-	}
-}
-
-func testExpiredWriters(t *testing.T, legacy bool) {
 	check := func(err error) {
 		t.Helper()
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	db, err := initDb(t, NewCoreMemory(), sha1Hasher(), legacy)
+	db, err := NewDatabase(NewCoreMemory(), sha1Hasher())
 	check(err)
 	history, err := NewWriteArrayList(db.RootCursor())
 	check(err)
 	_, err = db.RootCursor().WritePath([]PathPart{
 		Context{Function: func(cursor *WriteCursor) error { return history.Append(NewInt(999)) }},
 	})
-	// in streaming mode, the callback runs inside a transaction on the root,
+	// the callback runs inside a transaction on the root,
 	// so the top-level write inside it is a nested one
-	expectedError := ErrCursorNotWriteable
-	if db.Header.Streaming() {
-		expectedError = ErrNestedTopLevelWrite
-	}
-	assertEqual(t, error(expectedError), err)
+	assertEqual(t, error(ErrNestedTopLevelWrite), err)
 	count, err := history.Count()
 	check(err)
 	assertEqual(t, int64(0), count)
@@ -222,41 +206,39 @@ func testExpiredWriters(t *testing.T, legacy bool) {
 }
 
 func TestLowLevelApi(t *testing.T) {
-	for _, legacy := range []bool{true, false} {
-		// CoreMemory
-		{
-			core := NewCoreMemory()
-			hasher := sha1Hasher()
-			testLowLevelApi(t, core, hasher, legacy)
+	// CoreMemory
+	{
+		core := NewCoreMemory()
+		hasher := sha1Hasher()
+		testLowLevelApi(t, core, hasher)
+	}
+
+	// CoreFile
+	{
+		f, err := os.CreateTemp("", "database")
+		if err != nil {
+			t.Fatal(err)
 		}
+		defer os.Remove(f.Name())
 
-		// CoreFile
-		{
-			f, err := os.CreateTemp("", "database")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer os.Remove(f.Name())
+		core := NewCoreFile(f)
+		defer core.Close()
+		hasher := sha1Hasher()
+		testLowLevelApi(t, core, hasher)
+	}
 
-			core := NewCoreFile(f)
-			defer core.Close()
-			hasher := sha1Hasher()
-			testLowLevelApi(t, core, hasher, legacy)
+	// CoreBufferedFile
+	{
+		f, err := os.CreateTemp("", "database")
+		if err != nil {
+			t.Fatal(err)
 		}
+		defer os.Remove(f.Name())
 
-		// CoreBufferedFile
-		{
-			f, err := os.CreateTemp("", "database")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer os.Remove(f.Name())
-
-			core := NewCoreBufferedFileWithSize(f, 1024)
-			defer core.Close()
-			hasher := sha1Hasher()
-			testLowLevelApi(t, core, hasher, legacy)
-		}
+		core := NewCoreBufferedFileWithSize(f, 1024)
+		defer core.Close()
+		hasher := sha1Hasher()
+		testLowLevelApi(t, core, hasher)
 	}
 }
 
@@ -361,12 +343,12 @@ func lastSlotData(t *testing.T, cursor *WriteCursor) Slot {
 	return slot
 }
 
-func testSlice(t *testing.T, core Core, hasher Hasher, originalSize int, sliceOffset int64, sliceSize int64, legacy bool) {
+func testSlice(t *testing.T, core Core, hasher Hasher, originalSize int, sliceOffset int64, sliceSize int64) {
 	t.Helper()
 	if err := core.SetLength(0); err != nil {
 		t.Fatal(err)
 	}
-	db, err := initDb(t, core, hasher, legacy)
+	db, err := NewDatabase(core, hasher)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -525,12 +507,12 @@ func testSlice(t *testing.T, core Core, hasher Hasher, originalSize int, sliceOf
 	}
 }
 
-func testConcat(t *testing.T, core Core, hasher Hasher, listASize int64, listBSize int64, legacy bool) {
+func testConcat(t *testing.T, core Core, hasher Hasher, listASize int64, listBSize int64) {
 	t.Helper()
 	if err := core.SetLength(0); err != nil {
 		t.Fatal(err)
 	}
-	db, err := initDb(t, core, hasher, legacy)
+	db, err := NewDatabase(core, hasher)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -700,12 +682,12 @@ func testConcat(t *testing.T, core Core, hasher Hasher, listASize int64, listBSi
 	}
 }
 
-func testInsertAndRemove(t *testing.T, core Core, hasher Hasher, originalSize int, insertIndex int64, legacy bool) {
+func testInsertAndRemove(t *testing.T, core Core, hasher Hasher, originalSize int, insertIndex int64) {
 	t.Helper()
 	if err := core.SetLength(0); err != nil {
 		t.Fatal(err)
 	}
-	db, err := initDb(t, core, hasher, legacy)
+	db, err := NewDatabase(core, hasher)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -905,7 +887,7 @@ func testInsertAndRemove(t *testing.T, core Core, hasher Hasher, originalSize in
 	}
 }
 
-func testLowLevelApi(t *testing.T, core Core, hasher Hasher, legacy bool) {
+func testLowLevelApi(t *testing.T, core Core, hasher Hasher) {
 	t.Helper()
 
 	// open and re-open database
@@ -914,13 +896,13 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher, legacy bool) {
 		if err := core.SetLength(0); err != nil {
 			t.Fatal(err)
 		}
-		_, err := initDb(t, core, hasher, legacy)
+		_, err := NewDatabase(core, hasher)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		// re-open without error
-		_, err = initDb(t, core, hasher, legacy)
+		_, err = NewDatabase(core, hasher)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -932,7 +914,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher, legacy bool) {
 		}
 
 		// re-open with error
-		_, err = initDb(t, core, hasher, legacy)
+		_, err = NewDatabase(core, hasher)
 		if !errors.Is(err, ErrInvalidDatabase) {
 			t.Fatalf("expected ErrInvalidDatabase, got %v", err)
 		}
@@ -952,7 +934,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher, legacy bool) {
 		}
 
 		// re-open with error
-		_, err = initDb(t, core, hasher, legacy)
+		_, err = NewDatabase(core, hasher)
 		if !errors.Is(err, ErrInvalidVersion) {
 			t.Fatalf("expected ErrInvalidVersion, got %v", err)
 		}
@@ -969,7 +951,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher, legacy bool) {
 		if err := core.SetLength(0); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := initDb(t, core, hasherWithHashID, legacy); err != nil {
+		if _, err := NewDatabase(core, hasherWithHashID); err != nil {
 			t.Fatal(err)
 		}
 
@@ -1003,7 +985,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher, legacy bool) {
 		if err := core.SetLength(0); err != nil {
 			t.Fatal(err)
 		}
-		db, err := initDb(t, core, hasher, legacy)
+		db, err := NewDatabase(core, hasher)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2216,7 +2198,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher, legacy bool) {
 		if err := core.SetLength(0); err != nil {
 			t.Fatal(err)
 		}
-		db, err := initDb(t, core, hasher, legacy)
+		db, err := NewDatabase(core, hasher)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2344,7 +2326,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher, legacy bool) {
 		if err := core.SetLength(0); err != nil {
 			t.Fatal(err)
 		}
-		db, err := initDb(t, core, hasher, legacy)
+		db, err := NewDatabase(core, hasher)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2518,11 +2500,11 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher, legacy bool) {
 		if err := core.SetLength(0); err != nil {
 			t.Fatal(err)
 		}
-		_, err := initDb(t, core, hasher, legacy)
+		_, err := NewDatabase(core, hasher)
 		if err != nil {
 			t.Fatal(err)
 		}
-		db, err := initDb(t, core, hasher, legacy)
+		db, err := NewDatabase(core, hasher)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2637,7 +2619,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher, legacy bool) {
 		if err := core.SetLength(0); err != nil {
 			t.Fatal(err)
 		}
-		db, err := initDb(t, core, hasher, legacy)
+		db, err := NewDatabase(core, hasher)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2802,27 +2784,27 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher, legacy bool) {
 
 	{
 		// slice linked_array_list
-		testSlice(t, core, hasher, SlotCount*5+1, 10, 5, legacy)
-		testSlice(t, core, hasher, SlotCount*5+1, 0, int64(SlotCount*2), legacy)
-		testSlice(t, core, hasher, SlotCount*5, int64(SlotCount*3), int64(SlotCount), legacy)
-		testSlice(t, core, hasher, SlotCount*5, int64(SlotCount*3), int64(SlotCount*2), legacy)
-		testSlice(t, core, hasher, SlotCount*2, 10, int64(SlotCount), legacy)
-		testSlice(t, core, hasher, 2, 0, 2, legacy)
-		testSlice(t, core, hasher, 2, 1, 1, legacy)
-		testSlice(t, core, hasher, 1, 0, 0, legacy)
+		testSlice(t, core, hasher, SlotCount*5+1, 10, 5)
+		testSlice(t, core, hasher, SlotCount*5+1, 0, int64(SlotCount*2))
+		testSlice(t, core, hasher, SlotCount*5, int64(SlotCount*3), int64(SlotCount))
+		testSlice(t, core, hasher, SlotCount*5, int64(SlotCount*3), int64(SlotCount*2))
+		testSlice(t, core, hasher, SlotCount*2, 10, int64(SlotCount))
+		testSlice(t, core, hasher, 2, 0, 2)
+		testSlice(t, core, hasher, 2, 1, 1)
+		testSlice(t, core, hasher, 1, 0, 0)
 
 		// concat linked_array_list
-		testConcat(t, core, hasher, int64(SlotCount*5+1), int64(SlotCount+1), legacy)
-		testConcat(t, core, hasher, int64(SlotCount), int64(SlotCount), legacy)
-		testConcat(t, core, hasher, 1, 1, legacy)
-		testConcat(t, core, hasher, 0, 0, legacy)
+		testConcat(t, core, hasher, int64(SlotCount*5+1), int64(SlotCount+1))
+		testConcat(t, core, hasher, int64(SlotCount), int64(SlotCount))
+		testConcat(t, core, hasher, 1, 1)
+		testConcat(t, core, hasher, 0, 0)
 
 		// insert linked_array_list
-		testInsertAndRemove(t, core, hasher, 1, 0, legacy)
-		testInsertAndRemove(t, core, hasher, 10, 0, legacy)
-		testInsertAndRemove(t, core, hasher, 10, 5, legacy)
-		testInsertAndRemove(t, core, hasher, 10, 9, legacy)
-		testInsertAndRemove(t, core, hasher, SlotCount*5, int64(SlotCount*2), legacy)
+		testInsertAndRemove(t, core, hasher, 1, 0)
+		testInsertAndRemove(t, core, hasher, 10, 0)
+		testInsertAndRemove(t, core, hasher, 10, 5)
+		testInsertAndRemove(t, core, hasher, 10, 9)
+		testInsertAndRemove(t, core, hasher, SlotCount*5, int64(SlotCount*2))
 	}
 
 	// concat linked_array_list multiple times
@@ -2830,7 +2812,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher, legacy bool) {
 		if err := core.SetLength(0); err != nil {
 			t.Fatal(err)
 		}
-		db, err := initDb(t, core, hasher, legacy)
+		db, err := NewDatabase(core, hasher)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2963,11 +2945,11 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher, legacy bool) {
 		if err := core.SetLength(0); err != nil {
 			t.Fatal(err)
 		}
-		_, err := initDb(t, core, hasher, legacy)
+		_, err := NewDatabase(core, hasher)
 		if err != nil {
 			t.Fatal(err)
 		}
-		db, err := initDb(t, core, hasher, legacy)
+		db, err := NewDatabase(core, hasher)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -3016,7 +2998,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher, legacy bool) {
 		if err := core.SetLength(0); err != nil {
 			t.Fatal(err)
 		}
-		db, err := initDb(t, core, hasher, legacy)
+		db, err := NewDatabase(core, hasher)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -3062,7 +3044,7 @@ func testLowLevelApi(t *testing.T, core Core, hasher Hasher, legacy bool) {
 		if err := core.SetLength(0); err != nil {
 			t.Fatal(err)
 		}
-		db, err := initDb(t, core, hasher, legacy)
+		db, err := NewDatabase(core, hasher)
 		if err != nil {
 			t.Fatal(err)
 		}

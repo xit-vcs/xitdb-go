@@ -211,8 +211,8 @@ func (m *WriteHashMap) PutCursorByHash(hash []byte) (*WriteCursor, error) {
 }
 
 func (m *WriteHashMap) PutKeyByHash(hash []byte, data WriteableData) error {
-	// the key is written in the same write as the lookup, so in streaming
-	// mode, a root map does both in one transaction
+	// the key is written in the same write as the lookup, so a root map
+	// does both in one transaction
 	_, err := m.writeCursor.WritePath([]PathPart{
 		HashMapGetPart{Target: HashMapGetKey{Hash: hash}},
 		Context{Function: func(cursor *WriteCursor) error {
@@ -224,8 +224,8 @@ func (m *WriteHashMap) PutKeyByHash(hash []byte, data WriteableData) error {
 	return err
 }
 
-// writes the key (if it's empty) and the value in one write, so in
-// streaming mode, a root map does it in one transaction
+// writes the key (if it's empty) and the value in one write, so a root
+// map does it in one transaction
 func (m *WriteHashMap) putKeyAndValue(hash []byte, key WriteableData, data WriteableData) error {
 	_, err := m.writeCursor.WritePath([]PathPart{
 		HashMapGetPart{Target: HashMapGetKVPair{Hash: hash}},

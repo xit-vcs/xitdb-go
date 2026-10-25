@@ -13,8 +13,8 @@ type ReadCursor struct {
 	DB      *Database
 }
 
-// Slot returns the slot this cursor points to. for a streaming root
-// cursor, it reads the root again (see resolved).
+// Slot returns the slot this cursor points to. for a root cursor, it
+// reads the root again (see resolved).
 func (c *ReadCursor) Slot() (Slot, error) {
 	slotPtr, err := c.resolved()
 	if err != nil {
@@ -23,7 +23,7 @@ func (c *ReadCursor) Slot() (Slot, error) {
 	return slotPtr.Slot, nil
 }
 
-// a streaming root cursor only has a snapshot of the root slot,
+// a root cursor only has a snapshot of the root slot,
 // which goes stale after the next transaction, so read it again.
 // the result points at the copy of the root slot in the newest
 // trailer, not the root header, so it is a fixed snapshot: the
@@ -31,7 +31,7 @@ func (c *ReadCursor) Slot() (Slot, error) {
 // one commit, even if more are made.
 // every method that reads SlotPtr must go through this.
 func (c *ReadCursor) resolved() (SlotPointer, error) {
-	if c.DB.Header.Streaming() && c.DB.isRoot(c.SlotPtr) {
+	if isRoot(c.SlotPtr) {
 		header, err := c.DB.readRootHeader()
 		if err != nil {
 			return SlotPointer{}, err

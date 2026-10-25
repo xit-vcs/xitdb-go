@@ -111,8 +111,8 @@ func (s *WriteHashSet) RemoveByBytes(key Bytes) (bool, error) {
 }
 
 func (s *WriteHashSet) PutByHash(hash []byte, data WriteableData) error {
-	// the key is written in the same write as the lookup, so in streaming
-	// mode, a root set does both in one transaction
+	// the key is written in the same write as the lookup, so a root set
+	// does both in one transaction
 	_, err := s.writeCursor.WritePath([]PathPart{
 		HashMapGetPart{Target: HashMapGetKey{Hash: hash}},
 		Context{Function: func(cursor *WriteCursor) error {
