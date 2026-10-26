@@ -1909,16 +1909,18 @@ func testHighLevelApi(t *testing.T, core Core, hasher Hasher, fileMaybe *os.File
 				return err
 			}
 
-			// freeze here, so big-cities won't be mutated
-			if err := cursor.DB.Freeze(); err != nil {
-				return err
-			}
-
 			citiesCursor, err := moment.PutCursor("cities")
 			if err != nil {
 				return err
 			}
 			if err := citiesCursor.Write(mustSlot(t, bigCities)); err != nil {
+				return err
+			}
+
+			// freeze here, so writes to cities won't mutate big-cities
+			// note: you can also freeze globally with `cursor.DB.Freeze()`,
+			// but call it before `PutCursor` creates the cities cursor
+			if err := citiesCursor.Freeze(); err != nil {
 				return err
 			}
 

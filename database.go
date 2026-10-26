@@ -1182,18 +1182,19 @@ func initPartFor(tag Tag) (PathPart, bool) {
 	}
 }
 
-// whether the data at ptr predates this transaction, so it must be
-// copied before it is modified. writes only happen inside a transaction.
-func (db *Database) isOld(ptr int64) (bool, error) {
+// whether the data at ptr predates this transaction, or the writing
+// cursor's freeze point, so it must be copied before it is modified.
+// writes only happen inside a transaction.
+func (db *Database) isOld(ptr, frozenAt int64) (bool, error) {
 	if db.TxStart == nil {
 		return false, ErrExpectedTxStart
 	}
-	return ptr < *db.TxStart, nil
+	return ptr < max(*db.TxStart, frozenAt), nil
 }
 
 // copies an index block to the end unless it was made in this transaction
-func (db *Database) copyIndexBlockIfOld(ptr int64) (int64, error) {
-	old, err := db.isOld(ptr)
+func (db *Database) copyIndexBlockIfOld(ptr, frozenAt int64) (int64, error) {
+	old, err := db.isOld(ptr, frozenAt)
 	if err != nil {
 		return 0, err
 	}
@@ -1251,16 +1252,16 @@ func (db *Database) checkFrozenSlot(slotPtr SlotPointer) error {
 }
 
 // copy frozen collection storage before mutation to preserve existing readers
-func (db *Database) copyCollectionIfFrozen(slotPtr SlotPointer, init PathPart) (SlotPointer, error) {
+func (db *Database) copyCollectionIfFrozen(slotPtr SlotPointer, init PathPart, frozenAt int64) (SlotPointer, error) {
 	if db.transaction != nil && db.transaction.frozenAt != nil && slotPtr.Slot.Value < *db.transaction.frozenAt {
-		return init.readSlotPointer(db, ReadWrite, []PathPart{init}, 0, slotPtr)
+		return init.readSlotPointer(db, ReadWrite, []PathPart{init}, 0, slotPtr, frozenAt)
 	}
 	return slotPtr, nil
 }
 
 // readSlotPointer - the central path-traversal method
 
-func (db *Database) readSlotPointer(writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (db *Database) readSlotPointer(writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error) {
 	if pathI == len(path) {
 		if writeMode == ReadOnly && slotPtr.Slot.Empty() {
 			return SlotPointer{}, ErrKeyNotFound
@@ -1284,7 +1285,7 @@ func (db *Database) readSlotPointer(writeMode WriteMode, path []PathPart, pathI 
 		// the position of a read path doesn't matter, but it must not be
 		// RootHeaderStart or this would recurse forever
 		if writeMode == ReadOnly {
-			return db.readSlotPointer(writeMode, path, pathI, SlotPointer{Position: nil, Slot: root})
+			return db.readSlotPointer(writeMode, path, pathI, SlotPointer{Position: nil, Slot: root}, frozenAt)
 		}
 
 		// initializing an initialized root is free, so a wrapper like
@@ -1333,13 +1334,13 @@ func (db *Database) readSlotPointer(writeMode WriteMode, path []PathPart, pathI 
 		// block into the transaction before anything writes to it. the root
 		// has no enclosing init part, so run one here.
 		if initPart, ok := initPartFor(root.Tag); ok {
-			rootPtr, err = db.readSlotPointer(writeMode, []PathPart{initPart}, 0, rootPtr)
+			rootPtr, err = db.readSlotPointer(writeMode, []PathPart{initPart}, 0, rootPtr, frozenAt)
 			if err != nil {
 				return SlotPointer{}, err
 			}
 		}
 
-		result, err := db.readSlotPointer(writeMode, path, pathI, rootPtr)
+		result, err := db.readSlotPointer(writeMode, path, pathI, rootPtr, frozenAt)
 		if err != nil {
 			return SlotPointer{}, err
 		}
@@ -1370,12 +1371,12 @@ func (db *Database) readSlotPointer(writeMode WriteMode, path []PathPart, pathI 
 		return result, nil
 	}
 
-	return part.readSlotPointer(db, writeMode, path, pathI, slotPtr)
+	return part.readSlotPointer(db, writeMode, path, pathI, slotPtr, frozenAt)
 }
 
 // HashMap methods
 
-func (db *Database) readMapSlot(indexPos int64, keyHash []byte, keyOffset byte, writeMode WriteMode, target HashMapGetTarget) (HashMapGetResult, error) {
+func (db *Database) readMapSlot(indexPos int64, keyHash []byte, keyOffset byte, writeMode WriteMode, target HashMapGetTarget, frozenAt int64) (HashMapGetResult, error) {
 	if int(keyOffset) > (int(db.Header.HashSize)*8)/BitCount {
 		return HashMapGetResult{}, ErrKeyOffsetExceeded
 	}
@@ -1441,7 +1442,7 @@ func (db *Database) readMapSlot(indexPos int64, keyHash []byte, keyOffset byte, 
 		nextPtr := ptr
 		if writeMode == ReadWrite {
 			var err error
-			nextPtr, err = db.copyIndexBlockIfOld(ptr)
+			nextPtr, err = db.copyIndexBlockIfOld(ptr, frozenAt)
 			if err != nil {
 				return HashMapGetResult{}, err
 			}
@@ -1457,7 +1458,7 @@ func (db *Database) readMapSlot(indexPos int64, keyHash []byte, keyOffset byte, 
 				}
 			}
 		}
-		return db.readMapSlot(nextPtr, keyHash, keyOffset+1, writeMode, target)
+		return db.readMapSlot(nextPtr, keyHash, keyOffset+1, writeMode, target, frozenAt)
 
 	case TagKVPair:
 		if err := db.Core.SeekTo(ptr); err != nil {
@@ -1471,7 +1472,7 @@ func (db *Database) readMapSlot(indexPos int64, keyHash []byte, keyOffset byte, 
 
 		if bytes.Equal(kvPair.Hash, keyHash) {
 			if writeMode == ReadWrite {
-				old, err := db.isOld(ptr)
+				old, err := db.isOld(ptr, frozenAt)
 				if err != nil {
 					return HashMapGetResult{}, err
 				}
@@ -1552,7 +1553,7 @@ func (db *Database) readMapSlot(indexPos int64, keyHash []byte, keyOffset byte, 
 			if err := db.Core.Write(slotToWrite[:]); err != nil {
 				return HashMapGetResult{}, err
 			}
-			res, err := db.readMapSlot(nextIndexPos, keyHash, keyOffset+1, writeMode, target)
+			res, err := db.readMapSlot(nextIndexPos, keyHash, keyOffset+1, writeMode, target, frozenAt)
 			if err != nil {
 				return HashMapGetResult{}, err
 			}
@@ -1574,7 +1575,7 @@ func (db *Database) readMapSlot(indexPos int64, keyHash []byte, keyOffset byte, 
 	return HashMapGetResult{}, ErrUnreachable
 }
 
-func (db *Database) removeMapSlot(indexPos int64, keyHash []byte, keyOffset byte) (Slot, error) {
+func (db *Database) removeMapSlot(indexPos int64, keyHash []byte, keyOffset byte, frozenAt int64) (Slot, error) {
 	if int(keyOffset) > (int(db.Header.HashSize)*8)/BitCount {
 		return Slot{}, ErrKeyOffsetExceeded
 	}
@@ -1606,7 +1607,7 @@ func (db *Database) removeMapSlot(indexPos int64, keyHash []byte, keyOffset byte
 	case TagNone:
 		return Slot{}, ErrKeyNotFound
 	case TagIndex:
-		nextSlot, err = db.removeMapSlot(slot.Value, keyHash, keyOffset+1)
+		nextSlot, err = db.removeMapSlot(slot.Value, keyHash, keyOffset+1, frozenAt)
 		if err != nil {
 			return Slot{}, err
 		}
@@ -1669,7 +1670,7 @@ func (db *Database) removeMapSlot(indexPos int64, keyHash []byte, keyOffset byte
 	// there was more than one used slot, or a single INDEX slot,
 	// so we must keep this index block. update the slot in it,
 	// copying the block first unless it belongs to this transaction.
-	nextIndexPos, err := db.copyIndexBlockIfOld(indexPos)
+	nextIndexPos, err := db.copyIndexBlockIfOld(indexPos, frozenAt)
 	if err != nil {
 		return Slot{}, err
 	}
@@ -1685,7 +1686,7 @@ func (db *Database) removeMapSlot(indexPos int64, keyHash []byte, keyOffset byte
 
 // ArrayList methods
 
-func (db *Database) readArrayListSlotAppend(header ArrayListHeader, writeMode WriteMode) (ArrayListAppendResult, error) {
+func (db *Database) readArrayListSlotAppend(header ArrayListHeader, writeMode WriteMode, frozenAt int64) (ArrayListAppendResult, error) {
 	indexPos := header.Ptr
 	key := header.Size
 
@@ -1724,7 +1725,7 @@ func (db *Database) readArrayListSlotAppend(header ArrayListHeader, writeMode Wr
 		indexPos = nextIndexPos
 	}
 
-	slotPtr, err := db.readArrayListSlot(indexPos, key, nextShift, writeMode)
+	slotPtr, err := db.readArrayListSlot(indexPos, key, nextShift, writeMode, frozenAt)
 	if err != nil {
 		return ArrayListAppendResult{}, err
 	}
@@ -1746,7 +1747,7 @@ func (db *Database) readArrayListSlotAppend(header ArrayListHeader, writeMode Wr
 	}, nil
 }
 
-func (db *Database) readArrayListSlot(indexPos int64, key int64, shift byte, writeMode WriteMode) (SlotPointer, error) {
+func (db *Database) readArrayListSlot(indexPos int64, key int64, shift byte, writeMode WriteMode, frozenAt int64) (SlotPointer, error) {
 	if shift >= MaxBranchLength {
 		return SlotPointer{}, ErrMaxShiftExceeded
 	}
@@ -1792,13 +1793,13 @@ func (db *Database) readArrayListSlot(indexPos int64, key int64, shift byte, wri
 			if err := db.Core.Write(nsb[:]); err != nil {
 				return SlotPointer{}, err
 			}
-			return db.readArrayListSlot(nextIndexPos, key, shift-1, writeMode)
+			return db.readArrayListSlot(nextIndexPos, key, shift-1, writeMode, frozenAt)
 		}
 	case TagIndex:
 		nextPtr := ptr
 		if writeMode == ReadWrite {
 			var err error
-			nextPtr, err = db.copyIndexBlockIfOld(ptr)
+			nextPtr, err = db.copyIndexBlockIfOld(ptr, frozenAt)
 			if err != nil {
 				return SlotPointer{}, err
 			}
@@ -1814,7 +1815,7 @@ func (db *Database) readArrayListSlot(indexPos int64, key int64, shift byte, wri
 				}
 			}
 		}
-		return db.readArrayListSlot(nextPtr, key, shift-1, writeMode)
+		return db.readArrayListSlot(nextPtr, key, shift-1, writeMode, frozenAt)
 	default:
 		return SlotPointer{}, ErrUnexpectedTag
 	}
@@ -1822,7 +1823,7 @@ func (db *Database) readArrayListSlot(indexPos int64, key int64, shift byte, wri
 	return SlotPointer{}, ErrUnreachable
 }
 
-func (db *Database) readArrayListSlice(header ArrayListHeader, size int64) (ArrayListHeader, error) {
+func (db *Database) readArrayListSlice(header ArrayListHeader, size, frozenAt int64) (ArrayListHeader, error) {
 	if size > header.Size || size < 0 {
 		return ArrayListHeader{}, ErrKeyNotFound
 	}
@@ -1859,7 +1860,7 @@ func (db *Database) readArrayListSlice(header ArrayListHeader, size int64) (Arra
 	}
 	// the new root may still belong to a past moment. unlike child
 	// nodes, root nodes are written directly, so copy it now.
-	indexPos, err := db.copyIndexBlockIfOld(indexPos)
+	indexPos, err := db.copyIndexBlockIfOld(indexPos, frozenAt)
 	if err != nil {
 		return ArrayListHeader{}, err
 	}
@@ -1968,13 +1969,14 @@ func (db *Database) writeBTreeNode(node BTreeNode) (int64, error) {
 }
 
 // a node is safe to mutate in place when it was created in the current transaction
-// (offset >= TxStart), since no committed moment and no pre-concat sharing can
-// reference it. concat advances TxStart (an implicit freeze) precisely so its shared
-// subtrees fall below it here. for an ephemeral (non-transactional) database there is no
-// transaction, so everything is mutable in place until a concat first sets TxStart.
-func (db *Database) btreeReusable(ptr int64) bool {
+// after the writing cursor's freeze point (see isOld), since no committed moment and
+// no pre-concat sharing can reference it. concat advances TxStart (an implicit freeze)
+// precisely so its shared subtrees fall below it here. for an ephemeral
+// (non-transactional) database there is no transaction, so everything is mutable in
+// place until a concat first sets TxStart.
+func (db *Database) btreeReusable(ptr, frozenAt int64) bool {
 	// a transactional database outside a transaction can't reuse anything
-	old, err := db.isOld(ptr)
+	old, err := db.isOld(ptr, frozenAt)
 	if err != nil {
 		return false
 	}
@@ -1983,8 +1985,8 @@ func (db *Database) btreeReusable(ptr int64) bool {
 
 // write a new version of a node, reusing oldPtr's position in place if that node
 // belongs to this transaction, otherwise appending a copy
-func (db *Database) btreeWriteNode(node BTreeNode, oldPtr int64) (int64, error) {
-	if db.btreeReusable(oldPtr) {
+func (db *Database) btreeWriteNode(node BTreeNode, oldPtr, frozenAt int64) (int64, error) {
+	if db.btreeReusable(oldPtr, frozenAt) {
 		if err := db.writeBTreeNodeAt(node, oldPtr); err != nil {
 			return 0, err
 		}
@@ -2022,7 +2024,7 @@ func (db *Database) readBTreeSlot(rootPtr, rank int64) (SlotPointer, error) {
 
 // insert a placeholder slot at `rank` within the subtree at nodePtr, writing new nodes
 // along the path. the caller fills in the value at the returned ValuePosition.
-func (db *Database) btreeInsert(nodePtr, rank int64) (BTreeInsertResult, error) {
+func (db *Database) btreeInsert(nodePtr, rank, frozenAt int64) (BTreeInsertResult, error) {
 	node, err := db.readBTreeNode(nodePtr)
 	if err != nil {
 		return BTreeInsertResult{}, err
@@ -2043,7 +2045,7 @@ func (db *Database) btreeInsert(nodePtr, rank int64) (BTreeInsertResult, error) 
 		if total <= BTreeSlotCount {
 			leaf := BTreeNode{Kind: BTreeKindLeaf, Num: total}
 			copy(leaf.Values[:total], vals[:total])
-			ptr, err := db.btreeWriteNode(leaf, nodePtr)
+			ptr, err := db.btreeWriteNode(leaf, nodePtr, frozenAt)
 			if err != nil {
 				return BTreeInsertResult{}, err
 			}
@@ -2057,7 +2059,7 @@ func (db *Database) btreeInsert(nodePtr, rank int64) (BTreeInsertResult, error) 
 		copy(left.Values[:leftN], vals[:leftN])
 		right := BTreeNode{Kind: BTreeKindLeaf, Num: rightN}
 		copy(right.Values[:rightN], vals[leftN:total])
-		leftPtr, err := db.btreeWriteNode(left, nodePtr)
+		leftPtr, err := db.btreeWriteNode(left, nodePtr, frozenAt)
 		if err != nil {
 			return BTreeInsertResult{}, err
 		}
@@ -2080,7 +2082,7 @@ func (db *Database) btreeInsert(nodePtr, rank int64) (BTreeInsertResult, error) 
 			rem -= node.Counts[i]
 			i++
 		}
-		child, err := db.btreeInsert(node.Children[i].Value, rem)
+		child, err := db.btreeInsert(node.Children[i].Value, rem, frozenAt)
 		if err != nil {
 			return BTreeInsertResult{}, err
 		}
@@ -2109,7 +2111,7 @@ func (db *Database) btreeInsert(nodePtr, rank int64) (BTreeInsertResult, error) 
 			branch := BTreeNode{Kind: BTreeKindBranch, Num: total}
 			copy(branch.Children[:total], children[:total])
 			copy(branch.Counts[:total], counts[:total])
-			ptr, err := db.btreeWriteNode(branch, nodePtr)
+			ptr, err := db.btreeWriteNode(branch, nodePtr, frozenAt)
 			if err != nil {
 				return BTreeInsertResult{}, err
 			}
@@ -2125,7 +2127,7 @@ func (db *Database) btreeInsert(nodePtr, rank int64) (BTreeInsertResult, error) 
 		right := BTreeNode{Kind: BTreeKindBranch, Num: rightN}
 		copy(right.Children[:rightN], children[leftN:total])
 		copy(right.Counts[:rightN], counts[leftN:total])
-		leftPtr, err := db.btreeWriteNode(left, nodePtr)
+		leftPtr, err := db.btreeWriteNode(left, nodePtr, frozenAt)
 		if err != nil {
 			return BTreeInsertResult{}, err
 		}
@@ -2148,14 +2150,14 @@ func (db *Database) btreeGrowRoot(result BTreeInsertResult) (int64, error) {
 // belong to a past transaction. the element count is unchanged, so when the whole path
 // is already this-transaction nothing is rewritten and the caller writes straight into
 // the existing leaf.
-func (db *Database) btreeGetForWrite(nodePtr, rank int64) (BTreeWriteSlot, error) {
+func (db *Database) btreeGetForWrite(nodePtr, rank, frozenAt int64) (BTreeWriteSlot, error) {
 	node, err := db.readBTreeNode(nodePtr)
 	if err != nil {
 		return BTreeWriteSlot{}, err
 	}
 	if node.Kind == BTreeKindLeaf {
 		newPtr := nodePtr
-		if !db.btreeReusable(nodePtr) {
+		if !db.btreeReusable(nodePtr, frozenAt) {
 			newPtr, err = db.writeBTreeNode(node)
 			if err != nil {
 				return BTreeWriteSlot{}, err
@@ -2170,7 +2172,7 @@ func (db *Database) btreeGetForWrite(nodePtr, rank int64) (BTreeWriteSlot, error
 		i++
 	}
 	childPtr := node.Children[i].Value
-	child, err := db.btreeGetForWrite(childPtr, rem)
+	child, err := db.btreeGetForWrite(childPtr, rem, frozenAt)
 	if err != nil {
 		return BTreeWriteSlot{}, err
 	}
@@ -2179,7 +2181,7 @@ func (db *Database) btreeGetForWrite(nodePtr, rank int64) (BTreeWriteSlot, error
 		return BTreeWriteSlot{NodePtr: nodePtr, ValuePosition: child.ValuePosition, Slot: child.Slot}, nil
 	}
 	node.Children[i] = Slot{Value: child.NodePtr, Tag: TagIndex}
-	newPtr, err := db.btreeWriteNode(node, nodePtr)
+	newPtr, err := db.btreeWriteNode(node, nodePtr, frozenAt)
 	if err != nil {
 		return BTreeWriteSlot{}, err
 	}
@@ -2190,7 +2192,7 @@ func (db *Database) btreeGetForWrite(nodePtr, rank int64) (BTreeWriteSlot, error
 // behind for the caller to write. an emptied child is dropped and a child left under
 // half full is merged with a neighbor it fits with, so every leaf stays at the same
 // depth.
-func (db *Database) btreeRemove(nodePtr, rank int64) (BTreeNode, error) {
+func (db *Database) btreeRemove(nodePtr, rank, frozenAt int64) (BTreeNode, error) {
 	node, err := db.readBTreeNode(nodePtr)
 	if err != nil {
 		return BTreeNode{}, err
@@ -2209,7 +2211,7 @@ func (db *Database) btreeRemove(nodePtr, rank int64) (BTreeNode, error) {
 			i++
 		}
 		childPtr := node.Children[i].Value
-		child, err := db.btreeRemove(childPtr, rem)
+		child, err := db.btreeRemove(childPtr, rem, frozenAt)
 		if err != nil {
 			return BTreeNode{}, err
 		}
@@ -2239,7 +2241,7 @@ func (db *Database) btreeRemove(nodePtr, rank int64) (BTreeNode, error) {
 				i = first
 			}
 		}
-		ptr, err := db.btreeWriteNode(child, childPtr)
+		ptr, err := db.btreeWriteNode(child, childPtr, frozenAt)
 		if err != nil {
 			return BTreeNode{}, err
 		}
@@ -2661,8 +2663,8 @@ func (db *Database) writeSortedNode(node SortedNode) (int64, error) {
 
 // reuse oldPtr's position in place when it belongs to this transaction (mirrors
 // btreeWriteNode / the TxStart path-copying model)
-func (db *Database) sortedWriteNode(node SortedNode, oldPtr int64) (int64, error) {
-	if db.btreeReusable(oldPtr) {
+func (db *Database) sortedWriteNode(node SortedNode, oldPtr, frozenAt int64) (int64, error) {
+	if db.btreeReusable(oldPtr, frozenAt) {
 		if err := db.writeSortedNodeAt(node, oldPtr); err != nil {
 			return 0, err
 		}
@@ -2890,7 +2892,7 @@ func (db *Database) sortedNewEntry(key []byte) (SortedEntry, error) {
 // insert key (or locate it for replacement) within the subtree at nodePtr,
 // path-copying nodes and maintaining separators + counts. the caller writes the value
 // of the returned entry.
-func (db *Database) sortedPut(nodePtr int64, key []byte) (SortedInsertResult, error) {
+func (db *Database) sortedPut(nodePtr int64, key []byte, frozenAt int64) (SortedInsertResult, error) {
 	node, err := db.readSortedNode(nodePtr)
 	if err != nil {
 		return SortedInsertResult{}, err
@@ -2924,7 +2926,7 @@ func (db *Database) sortedPut(nodePtr int64, key []byte) (SortedInsertResult, er
 			// belongs to a past moment
 			leaf := node
 			kvSlot := node.Entries[idx]
-			if !db.btreeReusable(kvSlot.Value) {
+			if !db.btreeReusable(kvSlot.Value, frozenAt) {
 				kv, err := db.readKvPair(kvSlot)
 				if err != nil {
 					return SortedInsertResult{}, err
@@ -2935,7 +2937,7 @@ func (db *Database) sortedPut(nodePtr int64, key []byte) (SortedInsertResult, er
 				}
 				leaf.Entries[idx] = kvSlot
 			}
-			ptr, err := db.sortedWriteNode(leaf, nodePtr)
+			ptr, err := db.sortedWriteNode(leaf, nodePtr, frozenAt)
 			if err != nil {
 				return SortedInsertResult{}, err
 			}
@@ -2956,7 +2958,7 @@ func (db *Database) sortedPut(nodePtr int64, key []byte) (SortedInsertResult, er
 		if total <= BTreeSlotCount {
 			leaf := SortedNode{Kind: BTreeKindLeaf, Num: total}
 			copy(leaf.Entries[:total], entries[:total])
-			ptr, err := db.sortedWriteNode(leaf, nodePtr)
+			ptr, err := db.sortedWriteNode(leaf, nodePtr, frozenAt)
 			if err != nil {
 				return SortedInsertResult{}, err
 			}
@@ -2976,7 +2978,7 @@ func (db *Database) sortedPut(nodePtr int64, key []byte) (SortedInsertResult, er
 			return SortedInsertResult{}, err
 		}
 		separator := sepKv.KeySlot
-		leftPtr, err := db.sortedWriteNode(left, nodePtr)
+		leftPtr, err := db.sortedWriteNode(left, nodePtr, frozenAt)
 		if err != nil {
 			return SortedInsertResult{}, err
 		}
@@ -2998,7 +3000,7 @@ func (db *Database) sortedPut(nodePtr int64, key []byte) (SortedInsertResult, er
 				break
 			}
 		}
-		child, err := db.sortedPut(node.Children[i].Value, key)
+		child, err := db.sortedPut(node.Children[i].Value, key, frozenAt)
 		if err != nil {
 			return SortedInsertResult{}, err
 		}
@@ -3032,7 +3034,7 @@ func (db *Database) sortedPut(nodePtr int64, key []byte) (SortedInsertResult, er
 			copy(branch.Children[:total], children[:total])
 			copy(branch.Separators[:total], separators[:total])
 			copy(branch.Counts[:total], counts[:total])
-			ptr, err := db.sortedWriteNode(branch, nodePtr)
+			ptr, err := db.sortedWriteNode(branch, nodePtr, frozenAt)
 			if err != nil {
 				return SortedInsertResult{}, err
 			}
@@ -3052,7 +3054,7 @@ func (db *Database) sortedPut(nodePtr int64, key []byte) (SortedInsertResult, er
 		copy(right.Separators[:rightN], separators[leftN:total])
 		copy(right.Counts[:rightN], counts[leftN:total])
 		separator := separators[leftN]
-		leftPtr, err := db.sortedWriteNode(left, nodePtr)
+		leftPtr, err := db.sortedWriteNode(left, nodePtr, frozenAt)
 		if err != nil {
 			return SortedInsertResult{}, err
 		}
@@ -3067,7 +3069,7 @@ func (db *Database) sortedPut(nodePtr int64, key []byte) (SortedInsertResult, er
 
 // remove key from the subtree at nodePtr, path-copying nodes and decrementing counts.
 // an emptied leaf is left in place (see SortedRemoveResult).
-func (db *Database) sortedRemove(nodePtr int64, key []byte) (SortedRemoveResult, error) {
+func (db *Database) sortedRemove(nodePtr int64, key []byte, frozenAt int64) (SortedRemoveResult, error) {
 	node, err := db.readSortedNode(nodePtr)
 	if err != nil {
 		return SortedRemoveResult{}, err
@@ -3100,7 +3102,7 @@ func (db *Database) sortedRemove(nodePtr int64, key []byte) (SortedRemoveResult,
 		leaf := SortedNode{Kind: BTreeKindLeaf, Num: node.Num - 1}
 		copy(leaf.Entries[:idx], node.Entries[:idx])
 		copy(leaf.Entries[idx:node.Num-1], node.Entries[idx+1:node.Num])
-		ptr, err := db.sortedWriteNode(leaf, nodePtr)
+		ptr, err := db.sortedWriteNode(leaf, nodePtr, frozenAt)
 		if err != nil {
 			return SortedRemoveResult{}, err
 		}
@@ -3118,7 +3120,7 @@ func (db *Database) sortedRemove(nodePtr int64, key []byte) (SortedRemoveResult,
 				break
 			}
 		}
-		child, err := db.sortedRemove(node.Children[i].Value, key)
+		child, err := db.sortedRemove(node.Children[i].Value, key, frozenAt)
 		if err != nil {
 			return SortedRemoveResult{}, err
 		}
@@ -3128,7 +3130,7 @@ func (db *Database) sortedRemove(nodePtr int64, key []byte) (SortedRemoveResult,
 		branch := node
 		branch.Children[i] = Slot{Value: child.NodePtr, Tag: TagIndex}
 		branch.Counts[i] -= 1
-		ptr, err := db.sortedWriteNode(branch, nodePtr)
+		ptr, err := db.sortedWriteNode(branch, nodePtr, frozenAt)
 		if err != nil {
 			return SortedRemoveResult{}, err
 		}

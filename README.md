@@ -494,7 +494,7 @@ if err := history.Append(historySlot); err != nil {
 }
 ```
 
-This time, after making the "big cities" list, we call `Freeze`, which tells xitdb to consider all data made so far in the transaction to be immutable. After that, we can clone it into the "cities" list and it will work the way we wanted:
+This time, after cloning "big cities" into the "cities" list, we call `Freeze` on the cursor. This tells xitdb that writes through that cursor must treat all data made so far in the transaction as immutable, so they copy it instead of changing it. Writes through other cursors aren't affected. Now it works the way we wanted:
 
 ```go
 lastSlot, err := history.GetSlot(-1)
@@ -523,11 +523,6 @@ err = history.AppendContext(lastSlot, func(cursor *xitdb.WriteCursor) error {
         return err
     }
 
-    // freeze here, so big-cities won't be mutated
-    if err := cursor.DB.Freeze(); err != nil {
-        return err
-    }
-
     // create a new key called "cities" whose initial value is
     // based on the "big-cities" list
     citiesCursor, err := moment.PutCursor("cities")
@@ -539,6 +534,13 @@ err = history.AppendContext(lastSlot, func(cursor *xitdb.WriteCursor) error {
         return err
     }
     citiesCursor.Write(bigCitiesSlot)
+
+    // freeze here, so writes to cities won't mutate big-cities
+    // note: you can also freeze globally with `cursor.DB.Freeze()`,
+    // but call it before `PutCursor` creates the cities cursor
+    if err := citiesCursor.Freeze(); err != nil {
+        return err
+    }
 
     cities, err := xitdb.NewWriteArrayList(citiesCursor)
     if err != nil {

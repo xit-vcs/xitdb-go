@@ -3,6 +3,9 @@ package xitdb
 type WriteCursor struct {
 	*ReadCursor
 	transaction *transaction
+	// writes through this cursor copy any data written before this
+	// position, even within the transaction (see Freeze)
+	frozenAt int64
 }
 
 func newWriteCursor(slotPtr SlotPointer, db *Database) *WriteCursor {
@@ -25,9 +28,9 @@ func (c *WriteCursor) checkWritable() error {
 	return c.DB.checkFrozenSlot(c.SlotPtr)
 }
 
-// reload after freezing because copy-on-write may change where the slot points
+// reload because an earlier write may have moved what the slot points to
 func (c *WriteCursor) reloadSlot() error {
-	if c.transaction != nil && c.transaction.frozenAt != nil && c.SlotPtr.Position != nil {
+	if c.transaction != nil && c.SlotPtr.Position != nil {
 		if err := c.DB.Core.SeekTo(*c.SlotPtr.Position); err != nil {
 			return err
 		}
@@ -64,7 +67,7 @@ func (c *WriteCursor) WritePath(path []PathPart) (*WriteCursor, error) {
 	err := c.reloadSlot()
 	var slotPtr SlotPointer
 	if err == nil {
-		slotPtr, err = c.DB.readSlotPointer(ReadWrite, path, 0, c.SlotPtr)
+		slotPtr, err = c.DB.readSlotPointer(ReadWrite, path, 0, c.SlotPtr, c.frozenAt)
 	}
 	if err != nil {
 		return nil, err
@@ -79,10 +82,28 @@ func (c *WriteCursor) WritePath(path []PathPart) (*WriteCursor, error) {
 		return nil, err
 	}
 	cursor := newWriteCursor(slotPtr, c.DB)
+	cursor.frozenAt = c.frozenAt
 	if err := cursor.reloadSlot(); err != nil {
 		return nil, err
 	}
 	return cursor, nil
+}
+
+// makes writes through this cursor, and cursors made from it afterward,
+// copy what the transaction wrote so far instead of changing it in
+// place. call it after pointing this slot at data still referred to
+// elsewhere, and before wrapping the cursor in a collection, which keeps
+// its own copy. unlike Database.Freeze, other cursors keep writing in place.
+func (c *WriteCursor) Freeze() error {
+	if c.DB.TxStart == nil {
+		return ErrExpectedTxStart
+	}
+	length, err := c.DB.Core.Length()
+	if err != nil {
+		return err
+	}
+	c.frozenAt = length
+	return nil
 }
 
 func (c *WriteCursor) Write(data WriteableData) error {
@@ -122,8 +143,8 @@ func (c *WriteCursor) ReadKeyValuePair() (*WriteKVPairCursor, error) {
 		return nil, err
 	}
 	return &WriteKVPairCursor{
-		ValueCursor: &WriteCursor{ReadCursor: readKVP.ValueCursor, transaction: c.transaction},
-		KeyCursor:   &WriteCursor{ReadCursor: readKVP.KeyCursor, transaction: c.transaction},
+		ValueCursor: &WriteCursor{ReadCursor: readKVP.ValueCursor, transaction: c.transaction, frozenAt: c.frozenAt},
+		KeyCursor:   &WriteCursor{ReadCursor: readKVP.KeyCursor, transaction: c.transaction, frozenAt: c.frozenAt},
 		Hash:        readKVP.Hash,
 	}, nil
 }

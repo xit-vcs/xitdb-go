@@ -7,14 +7,14 @@ import (
 )
 
 type PathPart interface {
-	readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error)
+	readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error)
 }
 
 // ArrayListInit
 
 type ArrayListInit struct{}
 
-func (p ArrayListInit) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p ArrayListInit) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error) {
 	if writeMode == ReadOnly {
 		return SlotPointer{}, ErrWriteNotAllowed
 	}
@@ -50,13 +50,13 @@ func (p ArrayListInit) readSlotPointer(db *Database, writeMode WriteMode, path [
 		if err := db.Core.Write(sb[:]); err != nil {
 			return SlotPointer{}, err
 		}
-		return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr)
+		return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr, frozenAt)
 
 	case TagArrayList:
 		arrayListStart := slotPtr.Slot.Value
 
 		// copy it to the end unless it was made in this transaction
-		old, err := db.isOld(arrayListStart)
+		old, err := db.isOld(arrayListStart, frozenAt)
 		if err != nil {
 			return SlotPointer{}, err
 		}
@@ -106,7 +106,7 @@ func (p ArrayListInit) readSlotPointer(db *Database, writeMode WriteMode, path [
 		if err := db.Core.Write(sb[:]); err != nil {
 			return SlotPointer{}, err
 		}
-		return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr)
+		return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr, frozenAt)
 
 	default:
 		return SlotPointer{}, ErrUnexpectedTag
@@ -119,7 +119,7 @@ type ArrayListGet struct {
 	Index int64
 }
 
-func (p ArrayListGet) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p ArrayListGet) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error) {
 	switch slotPtr.Slot.Tag {
 	case TagNone:
 		return SlotPointer{}, ErrKeyNotFound
@@ -130,7 +130,7 @@ func (p ArrayListGet) readSlotPointer(db *Database, writeMode WriteMode, path []
 
 	if writeMode == ReadWrite {
 		var err error
-		slotPtr, err = db.copyCollectionIfFrozen(slotPtr, ArrayListInit{})
+		slotPtr, err = db.copyCollectionIfFrozen(slotPtr, ArrayListInit{}, frozenAt)
 		if err != nil {
 			return SlotPointer{}, err
 		}
@@ -166,19 +166,19 @@ func (p ArrayListGet) readSlotPointer(db *Database, writeMode WriteMode, path []
 	} else {
 		shift = byte(math.Log(float64(lastKey)) / math.Log(float64(SlotCount)))
 	}
-	finalSlotPtr, err := db.readArrayListSlot(header.Ptr, key, shift, writeMode)
+	finalSlotPtr, err := db.readArrayListSlot(header.Ptr, key, shift, writeMode, frozenAt)
 	if err != nil {
 		return SlotPointer{}, err
 	}
 
-	return db.readSlotPointer(writeMode, path, pathI+1, finalSlotPtr)
+	return db.readSlotPointer(writeMode, path, pathI+1, finalSlotPtr, frozenAt)
 }
 
 // ArrayListAppend
 
 type ArrayListAppend struct{}
 
-func (p ArrayListAppend) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p ArrayListAppend) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error) {
 	if writeMode == ReadOnly {
 		return SlotPointer{}, ErrWriteNotAllowed
 	}
@@ -187,7 +187,7 @@ func (p ArrayListAppend) readSlotPointer(db *Database, writeMode WriteMode, path
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
-	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, ArrayListInit{})
+	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, ArrayListInit{}, frozenAt)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -205,7 +205,7 @@ func (p ArrayListAppend) readSlotPointer(db *Database, writeMode WriteMode, path
 		return SlotPointer{}, err
 	}
 
-	appendResult, err := db.readArrayListSlotAppend(origHeader, writeMode)
+	appendResult, err := db.readArrayListSlotAppend(origHeader, writeMode, frozenAt)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -223,7 +223,7 @@ func (p ArrayListAppend) readSlotPointer(db *Database, writeMode WriteMode, path
 	if db.transaction != nil && db.transaction.isScratchPosition(slotPtr.Position) {
 		db.transaction.rootPosition = appendResult.SlotPtr.Position
 	}
-	return db.readSlotPointer(writeMode, path, pathI+1, appendResult.SlotPtr)
+	return db.readSlotPointer(writeMode, path, pathI+1, appendResult.SlotPtr, frozenAt)
 }
 
 // ArrayListSlice
@@ -232,7 +232,7 @@ type ArrayListSlice struct {
 	Size int64
 }
 
-func (p ArrayListSlice) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p ArrayListSlice) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error) {
 	if writeMode == ReadOnly {
 		return SlotPointer{}, ErrWriteNotAllowed
 	}
@@ -240,7 +240,7 @@ func (p ArrayListSlice) readSlotPointer(db *Database, writeMode WriteMode, path 
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
-	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, ArrayListInit{})
+	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, ArrayListInit{}, frozenAt)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -257,7 +257,7 @@ func (p ArrayListSlice) readSlotPointer(db *Database, writeMode WriteMode, path 
 		return SlotPointer{}, err
 	}
 
-	sliceHeader, err := db.readArrayListSlice(origHeader, p.Size)
+	sliceHeader, err := db.readArrayListSlice(origHeader, p.Size, frozenAt)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -269,14 +269,14 @@ func (p ArrayListSlice) readSlotPointer(db *Database, writeMode WriteMode, path 
 	if err := db.Core.Write(b[:]); err != nil {
 		return SlotPointer{}, err
 	}
-	return db.readSlotPointer(writeMode, path, pathI+1, slotPtr)
+	return db.readSlotPointer(writeMode, path, pathI+1, slotPtr, frozenAt)
 }
 
 // LinkedArrayListInit
 
 type LinkedArrayListInit struct{}
 
-func (p LinkedArrayListInit) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p LinkedArrayListInit) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error) {
 	if writeMode == ReadOnly {
 		return SlotPointer{}, ErrWriteNotAllowed
 	}
@@ -312,14 +312,14 @@ func (p LinkedArrayListInit) readSlotPointer(db *Database, writeMode WriteMode, 
 		if err := db.Core.Write(sb[:]); err != nil {
 			return SlotPointer{}, err
 		}
-		return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr)
+		return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr, frozenAt)
 
 	case TagLinkedArrayList:
 		headerPtr := slotPtr.Slot.Value
 		// copy the header into this transaction unless it was made in it, so past
 		// moments still pointing at the old header are unaffected. b-tree nodes are
 		// always appended, so only the header needs copying.
-		old, err := db.isOld(headerPtr)
+		old, err := db.isOld(headerPtr, frozenAt)
 		if err != nil {
 			return SlotPointer{}, err
 		}
@@ -351,7 +351,7 @@ func (p LinkedArrayListInit) readSlotPointer(db *Database, writeMode WriteMode, 
 		if err := db.Core.Write(sb[:]); err != nil {
 			return SlotPointer{}, err
 		}
-		return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr)
+		return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr, frozenAt)
 
 	default:
 		return SlotPointer{}, ErrUnexpectedTag
@@ -364,7 +364,7 @@ type LinkedArrayListGet struct {
 	Index int64
 }
 
-func (p LinkedArrayListGet) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p LinkedArrayListGet) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error) {
 	switch slotPtr.Slot.Tag {
 	case TagNone:
 		return SlotPointer{}, ErrKeyNotFound
@@ -376,7 +376,7 @@ func (p LinkedArrayListGet) readSlotPointer(db *Database, writeMode WriteMode, p
 	index := p.Index
 	if writeMode == ReadWrite {
 		var err error
-		slotPtr, err = db.copyCollectionIfFrozen(slotPtr, LinkedArrayListInit{})
+		slotPtr, err = db.copyCollectionIfFrozen(slotPtr, LinkedArrayListInit{}, frozenAt)
 		if err != nil {
 			return SlotPointer{}, err
 		}
@@ -408,11 +408,11 @@ func (p LinkedArrayListGet) readSlotPointer(db *Database, writeMode WriteMode, p
 		if err != nil {
 			return SlotPointer{}, err
 		}
-		return db.readSlotPointer(writeMode, path, pathI+1, finalSlotPtr)
+		return db.readSlotPointer(writeMode, path, pathI+1, finalSlotPtr, frozenAt)
 	}
 
 	// path-copy down to the value slot so the write is persistent
-	writeSlot, err := db.btreeGetForWrite(header.RootPtr, rank)
+	writeSlot, err := db.btreeGetForWrite(header.RootPtr, rank, frozenAt)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -428,14 +428,14 @@ func (p LinkedArrayListGet) readSlotPointer(db *Database, writeMode WriteMode, p
 			return SlotPointer{}, err
 		}
 	}
-	return db.readSlotPointer(writeMode, path, pathI+1, SlotPointer{Position: &valuePosition, Slot: writeSlot.Slot})
+	return db.readSlotPointer(writeMode, path, pathI+1, SlotPointer{Position: &valuePosition, Slot: writeSlot.Slot}, frozenAt)
 }
 
 // LinkedArrayListAppend
 
 type LinkedArrayListAppend struct{}
 
-func (p LinkedArrayListAppend) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p LinkedArrayListAppend) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error) {
 	if writeMode == ReadOnly {
 		return SlotPointer{}, ErrWriteNotAllowed
 	}
@@ -443,7 +443,7 @@ func (p LinkedArrayListAppend) readSlotPointer(db *Database, writeMode WriteMode
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
-	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, LinkedArrayListInit{})
+	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, LinkedArrayListInit{}, frozenAt)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -460,7 +460,7 @@ func (p LinkedArrayListAppend) readSlotPointer(db *Database, writeMode WriteMode
 		return SlotPointer{}, err
 	}
 
-	result, err := db.btreeInsert(header.RootPtr, header.Size)
+	result, err := db.btreeInsert(header.RootPtr, header.Size, frozenAt)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -482,7 +482,7 @@ func (p LinkedArrayListAppend) readSlotPointer(db *Database, writeMode WriteMode
 
 	// fill in the value via the rest of the path
 	valuePosition := result.ValuePosition
-	return db.readSlotPointer(writeMode, path, pathI+1, SlotPointer{Position: &valuePosition, Slot: Slot{}})
+	return db.readSlotPointer(writeMode, path, pathI+1, SlotPointer{Position: &valuePosition, Slot: Slot{}}, frozenAt)
 }
 
 // LinkedArrayListSlicePart
@@ -492,7 +492,7 @@ type LinkedArrayListSlicePart struct {
 	Size   int64
 }
 
-func (p LinkedArrayListSlicePart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p LinkedArrayListSlicePart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error) {
 	if writeMode == ReadOnly {
 		return SlotPointer{}, ErrWriteNotAllowed
 	}
@@ -500,7 +500,7 @@ func (p LinkedArrayListSlicePart) readSlotPointer(db *Database, writeMode WriteM
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
-	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, LinkedArrayListInit{})
+	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, LinkedArrayListInit{}, frozenAt)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -544,7 +544,7 @@ func (p LinkedArrayListSlicePart) readSlotPointer(db *Database, writeMode WriteM
 		return SlotPointer{}, err
 	}
 
-	return db.readSlotPointer(writeMode, path, pathI+1, slotPtr)
+	return db.readSlotPointer(writeMode, path, pathI+1, slotPtr, frozenAt)
 }
 
 // LinkedArrayListConcat
@@ -553,7 +553,7 @@ type LinkedArrayListConcatPart struct {
 	List Slot
 }
 
-func (p LinkedArrayListConcatPart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p LinkedArrayListConcatPart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error) {
 	if writeMode == ReadOnly {
 		return SlotPointer{}, ErrWriteNotAllowed
 	}
@@ -564,7 +564,7 @@ func (p LinkedArrayListConcatPart) readSlotPointer(db *Database, writeMode Write
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
-	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, LinkedArrayListInit{})
+	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, LinkedArrayListInit{}, frozenAt)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -617,7 +617,7 @@ func (p LinkedArrayListConcatPart) readSlotPointer(db *Database, writeMode Write
 		return SlotPointer{}, err
 	}
 
-	return db.readSlotPointer(writeMode, path, pathI+1, slotPtr)
+	return db.readSlotPointer(writeMode, path, pathI+1, slotPtr, frozenAt)
 }
 
 // LinkedArrayListInsert
@@ -626,7 +626,7 @@ type LinkedArrayListInsertPart struct {
 	Index int64
 }
 
-func (p LinkedArrayListInsertPart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p LinkedArrayListInsertPart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error) {
 	if writeMode == ReadOnly {
 		return SlotPointer{}, ErrWriteNotAllowed
 	}
@@ -634,7 +634,7 @@ func (p LinkedArrayListInsertPart) readSlotPointer(db *Database, writeMode Write
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
-	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, LinkedArrayListInit{})
+	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, LinkedArrayListInit{}, frozenAt)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -662,7 +662,7 @@ func (p LinkedArrayListInsertPart) readSlotPointer(db *Database, writeMode Write
 		rank = index
 	}
 
-	result, err := db.btreeInsert(header.RootPtr, rank)
+	result, err := db.btreeInsert(header.RootPtr, rank, frozenAt)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -683,7 +683,7 @@ func (p LinkedArrayListInsertPart) readSlotPointer(db *Database, writeMode Write
 	}
 
 	valuePosition := result.ValuePosition
-	return db.readSlotPointer(writeMode, path, pathI+1, SlotPointer{Position: &valuePosition, Slot: Slot{}})
+	return db.readSlotPointer(writeMode, path, pathI+1, SlotPointer{Position: &valuePosition, Slot: Slot{}}, frozenAt)
 }
 
 // LinkedArrayListRemove
@@ -692,7 +692,7 @@ type LinkedArrayListRemovePart struct {
 	Index int64
 }
 
-func (p LinkedArrayListRemovePart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p LinkedArrayListRemovePart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error) {
 	if writeMode == ReadOnly {
 		return SlotPointer{}, ErrWriteNotAllowed
 	}
@@ -700,7 +700,7 @@ func (p LinkedArrayListRemovePart) readSlotPointer(db *Database, writeMode Write
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
-	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, LinkedArrayListInit{})
+	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, LinkedArrayListInit{}, frozenAt)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -735,11 +735,11 @@ func (p LinkedArrayListRemovePart) readSlotPointer(db *Database, writeMode Write
 			return SlotPointer{}, err
 		}
 	} else {
-		root, err := db.btreeRemove(header.RootPtr, rank)
+		root, err := db.btreeRemove(header.RootPtr, rank, frozenAt)
 		if err != nil {
 			return SlotPointer{}, err
 		}
-		newRootPtr, err = db.btreeWriteNode(root, header.RootPtr)
+		newRootPtr, err = db.btreeWriteNode(root, header.RootPtr, frozenAt)
 		if err != nil {
 			return SlotPointer{}, err
 		}
@@ -764,7 +764,7 @@ func (p LinkedArrayListRemovePart) readSlotPointer(db *Database, writeMode Write
 		return SlotPointer{}, err
 	}
 
-	return db.readSlotPointer(writeMode, path, pathI+1, slotPtr)
+	return db.readSlotPointer(writeMode, path, pathI+1, slotPtr, frozenAt)
 }
 
 // HashMapInit
@@ -774,7 +774,7 @@ type HashMapInitPart struct {
 	Set     bool
 }
 
-func (p HashMapInitPart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p HashMapInitPart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error) {
 	if writeMode == ReadOnly {
 		return SlotPointer{}, ErrWriteNotAllowed
 	}
@@ -824,7 +824,7 @@ func (p HashMapInitPart) readSlotPointer(db *Database, writeMode WriteMode, path
 		if err := db.Core.Write(sb[:]); err != nil {
 			return SlotPointer{}, err
 		}
-		return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr)
+		return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr, frozenAt)
 
 	case TagHashMap, TagHashSet, TagCountedHashMap, TagCountedHashSet:
 		if p.Counted {
@@ -844,7 +844,7 @@ func (p HashMapInitPart) readSlotPointer(db *Database, writeMode WriteMode, path
 		mapStart := slotPtr.Slot.Value
 
 		// copy it to the end unless it was made in this transaction
-		old, err := db.isOld(mapStart)
+		old, err := db.isOld(mapStart, frozenAt)
 		if err != nil {
 			return SlotPointer{}, err
 		}
@@ -890,7 +890,7 @@ func (p HashMapInitPart) readSlotPointer(db *Database, writeMode WriteMode, path
 		if err := db.Core.Write(sb[:]); err != nil {
 			return SlotPointer{}, err
 		}
-		return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr)
+		return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr, frozenAt)
 
 	default:
 		return SlotPointer{}, ErrUnexpectedTag
@@ -903,7 +903,7 @@ type HashMapGetPart struct {
 	Target HashMapGetTarget
 }
 
-func (p HashMapGetPart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p HashMapGetPart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error) {
 	counted := false
 	switch slotPtr.Slot.Tag {
 	case TagNone:
@@ -917,7 +917,7 @@ func (p HashMapGetPart) readSlotPointer(db *Database, writeMode WriteMode, path 
 
 	if writeMode == ReadWrite {
 		var err error
-		slotPtr, err = db.copyCollectionIfFrozen(slotPtr, HashMapInitPart{Counted: counted, Set: slotPtr.Slot.Tag == TagHashSet || slotPtr.Slot.Tag == TagCountedHashSet})
+		slotPtr, err = db.copyCollectionIfFrozen(slotPtr, HashMapInitPart{Counted: counted, Set: slotPtr.Slot.Tag == TagHashSet || slotPtr.Slot.Tag == TagCountedHashSet}, frozenAt)
 		if err != nil {
 			return SlotPointer{}, err
 		}
@@ -934,7 +934,7 @@ func (p HashMapGetPart) readSlotPointer(db *Database, writeMode WriteMode, path 
 		return SlotPointer{}, err
 	}
 
-	res, err := db.readMapSlot(indexPos, hash, 0, writeMode, p.Target)
+	res, err := db.readMapSlot(indexPos, hash, 0, writeMode, p.Target, frozenAt)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -955,7 +955,7 @@ func (p HashMapGetPart) readSlotPointer(db *Database, writeMode WriteMode, path 
 		}
 	}
 
-	return db.readSlotPointer(writeMode, path, pathI+1, res.SlotPtr)
+	return db.readSlotPointer(writeMode, path, pathI+1, res.SlotPtr, frozenAt)
 }
 
 // HashMapRemove
@@ -964,7 +964,7 @@ type HashMapRemovePart struct {
 	Hash []byte
 }
 
-func (p HashMapRemovePart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p HashMapRemovePart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error) {
 	if writeMode == ReadOnly {
 		return SlotPointer{}, ErrWriteNotAllowed
 	}
@@ -980,7 +980,7 @@ func (p HashMapRemovePart) readSlotPointer(db *Database, writeMode WriteMode, pa
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
-	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, HashMapInitPart{Counted: counted, Set: slotPtr.Slot.Tag == TagHashSet || slotPtr.Slot.Tag == TagCountedHashSet})
+	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, HashMapInitPart{Counted: counted, Set: slotPtr.Slot.Tag == TagHashSet || slotPtr.Slot.Tag == TagCountedHashSet}, frozenAt)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -997,7 +997,7 @@ func (p HashMapRemovePart) readSlotPointer(db *Database, writeMode WriteMode, pa
 	}
 
 	keyFound := true
-	_, removeErr := db.removeMapSlot(indexPos, hash, 0)
+	_, removeErr := db.removeMapSlot(indexPos, hash, 0, frozenAt)
 	if removeErr != nil {
 		if errors.Is(removeErr, ErrKeyNotFound) {
 			keyFound = false
@@ -1035,7 +1035,7 @@ type SortedMapInitPart struct {
 	Set bool
 }
 
-func (p SortedMapInitPart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p SortedMapInitPart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error) {
 	if writeMode == ReadOnly {
 		return SlotPointer{}, ErrWriteNotAllowed
 	}
@@ -1074,7 +1074,7 @@ func (p SortedMapInitPart) readSlotPointer(db *Database, writeMode WriteMode, pa
 		if err := db.Core.Write(sb[:]); err != nil {
 			return SlotPointer{}, err
 		}
-		return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr)
+		return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr, frozenAt)
 
 	case TagSortedMap, TagSortedSet:
 		if slotPtr.Slot.Tag != tag {
@@ -1082,7 +1082,7 @@ func (p SortedMapInitPart) readSlotPointer(db *Database, writeMode WriteMode, pa
 		}
 		headerPtr := slotPtr.Slot.Value
 		// copy the header into this transaction unless it was made in it
-		old, err := db.isOld(headerPtr)
+		old, err := db.isOld(headerPtr, frozenAt)
 		if err != nil {
 			return SlotPointer{}, err
 		}
@@ -1114,7 +1114,7 @@ func (p SortedMapInitPart) readSlotPointer(db *Database, writeMode WriteMode, pa
 		if err := db.Core.Write(sb[:]); err != nil {
 			return SlotPointer{}, err
 		}
-		return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr)
+		return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr, frozenAt)
 
 	default:
 		return SlotPointer{}, ErrUnexpectedTag
@@ -1127,7 +1127,7 @@ type SortedMapGetPart struct {
 	Target SortedMapGetTarget
 }
 
-func (p SortedMapGetPart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p SortedMapGetPart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error) {
 	switch slotPtr.Slot.Tag {
 	case TagNone:
 		return SlotPointer{}, ErrKeyNotFound
@@ -1139,7 +1139,7 @@ func (p SortedMapGetPart) readSlotPointer(db *Database, writeMode WriteMode, pat
 	key := p.Target.getKey()
 	if writeMode == ReadWrite {
 		var err error
-		slotPtr, err = db.copyCollectionIfFrozen(slotPtr, SortedMapInitPart{Set: slotPtr.Slot.Tag == TagSortedSet})
+		slotPtr, err = db.copyCollectionIfFrozen(slotPtr, SortedMapInitPart{Set: slotPtr.Slot.Tag == TagSortedSet}, frozenAt)
 		if err != nil {
 			return SlotPointer{}, err
 		}
@@ -1169,10 +1169,10 @@ func (p SortedMapGetPart) readSlotPointer(db *Database, writeMode WriteMode, pat
 		if err != nil {
 			return SlotPointer{}, err
 		}
-		return db.readSlotPointer(writeMode, path, pathI+1, targetSlot)
+		return db.readSlotPointer(writeMode, path, pathI+1, targetSlot, frozenAt)
 	}
 
-	result, err := db.sortedPut(header.RootPtr, key)
+	result, err := db.sortedPut(header.RootPtr, key, frozenAt)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -1201,7 +1201,7 @@ func (p SortedMapGetPart) readSlotPointer(db *Database, writeMode WriteMode, pat
 	if err != nil {
 		return SlotPointer{}, err
 	}
-	return db.readSlotPointer(writeMode, path, pathI+1, targetSlot)
+	return db.readSlotPointer(writeMode, path, pathI+1, targetSlot, frozenAt)
 }
 
 // SortedMapGetIndex
@@ -1210,7 +1210,7 @@ type SortedMapGetIndexPart struct {
 	Index int64
 }
 
-func (p SortedMapGetIndexPart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p SortedMapGetIndexPart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error) {
 	if writeMode == ReadWrite {
 		return SlotPointer{}, ErrWriteNotAllowed
 	}
@@ -1254,7 +1254,7 @@ func (p SortedMapGetIndexPart) readSlotPointer(db *Database, writeMode WriteMode
 	// return the entry so the caller can read key and value
 	pos := found.Position
 	targetSlot := SlotPointer{Position: &pos, Slot: found.Slot}
-	return db.readSlotPointer(writeMode, path, pathI+1, targetSlot)
+	return db.readSlotPointer(writeMode, path, pathI+1, targetSlot, frozenAt)
 }
 
 // SortedMapRemove
@@ -1263,7 +1263,7 @@ type SortedMapRemovePart struct {
 	Key []byte
 }
 
-func (p SortedMapRemovePart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p SortedMapRemovePart) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error) {
 	if writeMode == ReadOnly {
 		return SlotPointer{}, ErrWriteNotAllowed
 	}
@@ -1276,7 +1276,7 @@ func (p SortedMapRemovePart) readSlotPointer(db *Database, writeMode WriteMode, 
 		return SlotPointer{}, ErrUnexpectedTag
 	}
 
-	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, SortedMapInitPart{Set: slotPtr.Slot.Tag == TagSortedSet})
+	slotPtr, err := db.copyCollectionIfFrozen(slotPtr, SortedMapInitPart{Set: slotPtr.Slot.Tag == TagSortedSet}, frozenAt)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -1293,7 +1293,7 @@ func (p SortedMapRemovePart) readSlotPointer(db *Database, writeMode WriteMode, 
 		return SlotPointer{}, err
 	}
 
-	result, err := db.sortedRemove(header.RootPtr, p.Key)
+	result, err := db.sortedRemove(header.RootPtr, p.Key, frozenAt)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -1319,7 +1319,7 @@ type WriteData struct {
 	Data WriteableData
 }
 
-func (p WriteData) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p WriteData) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error) {
 	if writeMode == ReadOnly {
 		return SlotPointer{}, ErrWriteNotAllowed
 	}
@@ -1386,7 +1386,7 @@ func (p WriteData) readSlotPointer(db *Database, writeMode WriteMode, path []Pat
 	}
 
 	nextSlotPtr := SlotPointer{Position: slotPtr.Position, Slot: slot}
-	return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr)
+	return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr, frozenAt)
 }
 
 // Context
@@ -1395,7 +1395,7 @@ type Context struct {
 	Function ContextFunction
 }
 
-func (p Context) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer) (SlotPointer, error) {
+func (p Context) readSlotPointer(db *Database, writeMode WriteMode, path []PathPart, pathI int, slotPtr SlotPointer, frozenAt int64) (SlotPointer, error) {
 	if writeMode == ReadOnly {
 		return SlotPointer{}, ErrWriteNotAllowed
 	}
@@ -1404,6 +1404,7 @@ func (p Context) readSlotPointer(db *Database, writeMode WriteMode, path []PathP
 	}
 
 	nextCursor := newWriteCursor(slotPtr, db)
+	nextCursor.frozenAt = frozenAt
 	err := p.Function(nextCursor)
 	if err != nil {
 		return SlotPointer{}, err

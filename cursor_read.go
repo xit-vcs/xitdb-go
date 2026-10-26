@@ -59,7 +59,8 @@ func (c *ReadCursor) ReadPath(path []PathPart) (*ReadCursor, error) {
 	if err != nil {
 		return nil, err
 	}
-	slotPtr, err := c.DB.readSlotPointer(ReadOnly, path, 0, start)
+	// reads never copy, so they need no freeze point
+	slotPtr, err := c.DB.readSlotPointer(ReadOnly, path, 0, start, 0)
 	if err != nil {
 		if errors.Is(err, ErrKeyNotFound) {
 			return nil, nil
@@ -74,7 +75,8 @@ func (c *ReadCursor) ReadPathSlot(path []PathPart) (Slot, error) {
 	if err != nil {
 		return Slot{}, err
 	}
-	slotPtr, err := c.DB.readSlotPointer(ReadOnly, path, 0, start)
+	// reads never copy, so they need no freeze point
+	slotPtr, err := c.DB.readSlotPointer(ReadOnly, path, 0, start, 0)
 	if err != nil {
 		if errors.Is(err, ErrKeyNotFound) {
 			return Slot{}, nil
