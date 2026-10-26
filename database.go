@@ -2186,6 +2186,91 @@ func (db *Database) btreeGetForWrite(nodePtr, rank int64) (BTreeWriteSlot, error
 	return BTreeWriteSlot{NodePtr: newPtr, ValuePosition: child.ValuePosition, Slot: child.Slot}, nil
 }
 
+// remove the element at `rank` within the subtree at nodePtr, returning the node left
+// behind for the caller to write. an emptied child is dropped and a child left under
+// half full is merged with a neighbor it fits with, so every leaf stays at the same
+// depth.
+func (db *Database) btreeRemove(nodePtr, rank int64) (BTreeNode, error) {
+	node, err := db.readBTreeNode(nodePtr)
+	if err != nil {
+		return BTreeNode{}, err
+	}
+	switch node.Kind {
+	case BTreeKindLeaf:
+		r := int(rank)
+		copy(node.Values[r:node.Num-1], node.Values[r+1:node.Num])
+		node.Num--
+		node.Values[node.Num] = Slot{}
+	case BTreeKindBranch:
+		i := 0
+		rem := rank
+		for i+1 < node.Num && rem >= node.Counts[i] {
+			rem -= node.Counts[i]
+			i++
+		}
+		childPtr := node.Children[i].Value
+		child, err := db.btreeRemove(childPtr, rem)
+		if err != nil {
+			return BTreeNode{}, err
+		}
+		if child.Num == 0 {
+			btreeDropChild(&node, i)
+			return node, nil
+		}
+		if child.Num < BTreeSplitCount && node.Num > 1 {
+			// the pair is i and its right neighbor, or its left one if it is last
+			first := i
+			neighborI := i + 1
+			if i+1 >= node.Num {
+				first = i - 1
+				neighborI = first
+			}
+			neighbor, err := db.readBTreeNode(node.Children[neighborI].Value)
+			if err != nil {
+				return BTreeNode{}, err
+			}
+			if child.Num+neighbor.Num <= BTreeSlotCount {
+				if first == i {
+					child = btreeConcatNodes(child, neighbor)
+				} else {
+					child = btreeConcatNodes(neighbor, child)
+				}
+				btreeDropChild(&node, first+1)
+				i = first
+			}
+		}
+		ptr, err := db.btreeWriteNode(child, childPtr)
+		if err != nil {
+			return BTreeNode{}, err
+		}
+		node.Children[i] = Slot{Value: ptr, Tag: TagIndex}
+		node.Counts[i] = child.SubtreeCount()
+	}
+	return node, nil
+}
+
+func btreeDropChild(branch *BTreeNode, i int) {
+	copy(branch.Children[i:branch.Num-1], branch.Children[i+1:branch.Num])
+	copy(branch.Counts[i:branch.Num-1], branch.Counts[i+1:branch.Num])
+	branch.Num--
+	branch.Children[branch.Num] = Slot{}
+	branch.Counts[branch.Num] = 0
+}
+
+// two nodes of the same kind whose entries fit in one node, a before b
+func btreeConcatNodes(a, b BTreeNode) BTreeNode {
+	node := a
+	switch a.Kind {
+	case BTreeKindLeaf:
+		copy(node.Values[a.Num:a.Num+b.Num], b.Values[:b.Num])
+	case BTreeKindBranch:
+		copy(node.Children[a.Num:a.Num+b.Num], b.Children[:b.Num])
+		copy(node.Counts[a.Num:a.Num+b.Num], b.Counts[:b.Num])
+	}
+	node.Num = a.Num + b.Num
+	return node
+}
+
 // height of a tree = number of branch levels above the leaves
 func (db *Database) btreeHeight(rootPtr int64) (int, error) {
 	ptr := rootPtr

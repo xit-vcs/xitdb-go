@@ -728,18 +728,29 @@ func (p LinkedArrayListRemovePart) readSlotPointer(db *Database, writeMode Write
 		rank = index
 	}
 
-	// remove = join the parts before and after the removed element
-	before, err := db.btreeSplit(header.RootPtr, rank)
-	if err != nil {
-		return SlotPointer{}, err
-	}
-	after, err := db.btreeSplit(before.Right, 1)
-	if err != nil {
-		return SlotPointer{}, err
-	}
-	newRootPtr, err := db.btreeJoin(before.Left, after.Right)
-	if err != nil {
-		return SlotPointer{}, err
+	var newRootPtr int64
+	if header.Size == 1 {
+		newRootPtr, err = db.btreeNewRoot()
+		if err != nil {
+			return SlotPointer{}, err
+		}
+	} else {
+		root, err := db.btreeRemove(header.RootPtr, rank)
+		if err != nil {
+			return SlotPointer{}, err
+		}
+		newRootPtr, err = db.btreeWriteNode(root, header.RootPtr)
+		if err != nil {
+			return SlotPointer{}, err
+		}
+		// a root left with one child is replaced by it
+		for root.Kind == BTreeKindBranch && root.Num == 1 {
+			newRootPtr = root.Children[0].Value
+			root, err = db.readBTreeNode(newRootPtr)
+			if err != nil {
+				return SlotPointer{}, err
+			}
+		}
 	}
 
 	// update the header before recursing into the rest of the path, so that a
