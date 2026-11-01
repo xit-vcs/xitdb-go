@@ -36,9 +36,6 @@ func (c *ReadCursor) resolved() (SlotPointer, error) {
 		if err != nil {
 			return SlotPointer{}, err
 		}
-		if header.FileSize < RootTrailerLength {
-			return SlotPointer{}, ErrInvalidDatabase
-		}
 		// the root slot is the first thing in the trailer
 		position := header.FileSize - RootTrailerLength
 		return SlotPointer{Position: &position, Slot: header.Root}, nil

@@ -159,12 +159,16 @@ func (h ArrayListHeader) WithPtr(ptr int64) ArrayListHeader {
 // header only caches the latest trailer, so every other committed byte is
 // immutable, and a replica stays in sync by copying the bytes it doesn't have.
 const (
-	RootHeaderStart = HeaderLength
-	RootHeaderEnd   = RootHeaderStart + RootHeaderLength
+	RootHeaderStart         = HeaderLength
+	RootHeaderEnd           = RootHeaderStart + RootHeaderLength
+	rootHeaderFileSizeStart = RootHeaderStart + SlotLength
 )
 
 // rewritten at every commit, as a cache of the latest trailer.
 // the root slot comes first on disk.
+// we only read FileSize, which lets us read the trailer. other xitdb
+// implementations may read the whole header to avoid that extra read,
+// but that increases the risk of a concurrent commit tearing it.
 const RootHeaderLength = SlotLength + 8
 
 type RootHeader struct {
@@ -951,25 +955,6 @@ func (db *Database) CommittedSize() (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	minimumSize := int64(RootHeaderEnd + RootTrailerLength)
-	if header.FileSize < minimumSize {
-		return 0, ErrInvalidDatabase
-	}
-	fileSize, err := db.Core.Length()
-	if err != nil {
-		return 0, err
-	}
-	if fileSize < header.FileSize {
-		return 0, ErrTruncatedDatabase
-	}
-	// the committed bytes must end with a trailer matching the header
-	trailer, err := db.readRootTrailer(header.FileSize)
-	if err != nil {
-		return 0, err
-	}
-	if trailer.Root != header.Root {
-		return 0, ErrInvalidDatabase
-	}
 	return header.FileSize, nil
 }
 
@@ -1015,19 +1000,33 @@ func (db *Database) truncate() error {
 	return nil
 }
 
+// the file size from the root header, and the root slot from the trailer it points to
 func (db *Database) readRootHeader() (RootHeader, error) {
-	if err := db.Core.SeekTo(RootHeaderStart); err != nil {
+	if err := db.Core.SeekTo(rootHeaderFileSizeStart); err != nil {
 		return RootHeader{}, err
 	}
-	var b [RootHeaderLength]byte
+	var b [8]byte
 	if err := db.Core.Read(b[:]); err != nil {
 		return RootHeader{}, err
 	}
-	header := RootHeaderFromBytes(b[:])
-	if err := header.Root.Tag.validate(); err != nil {
+	fileSize := int64(binary.BigEndian.Uint64(b[:]))
+	minimumSize := int64(RootHeaderEnd + RootTrailerLength)
+	if fileSize < minimumSize {
+		return RootHeader{}, ErrInvalidDatabase
+	}
+	length, err := db.Core.Length()
+	if err != nil {
 		return RootHeader{}, err
 	}
-	return header, nil
+	if length < fileSize {
+		return RootHeader{}, ErrTruncatedDatabase
+	}
+	// the committed bytes must end with a trailer
+	trailer, err := db.readRootTrailer(fileSize)
+	if err != nil {
+		return RootHeader{}, err
+	}
+	return RootHeader{FileSize: fileSize, Root: trailer.Root}, nil
 }
 
 // the most recently committed root slot
