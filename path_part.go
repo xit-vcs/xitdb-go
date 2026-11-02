@@ -1077,9 +1077,6 @@ func (p SortedMapInitPart) readSlotPointer(db *Database, writeMode WriteMode, pa
 		return db.readSlotPointer(writeMode, path, pathI+1, nextSlotPtr, frozenAt)
 
 	case TagSortedMap, TagSortedSet:
-		if slotPtr.Slot.Tag != tag {
-			return SlotPointer{}, ErrUnexpectedTag
-		}
 		headerPtr := slotPtr.Slot.Value
 		// copy the header into this transaction unless it was made in it
 		old, err := db.isOld(headerPtr, frozenAt)
@@ -1172,7 +1169,10 @@ func (p SortedMapGetPart) readSlotPointer(db *Database, writeMode WriteMode, pat
 		return db.readSlotPointer(writeMode, path, pathI+1, targetSlot, frozenAt)
 	}
 
-	result, err := db.sortedPut(header.RootPtr, key, frozenAt)
+	// only a set that is just touching the key can leave out the value
+	_, targetsKey := p.Target.(SortedMapGetKey)
+	keyOnly := slotPtr.Slot.Tag == TagSortedSet && targetsKey
+	result, err := db.sortedPut(header.RootPtr, key, keyOnly, frozenAt)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -1197,7 +1197,7 @@ func (p SortedMapGetPart) readSlotPointer(db *Database, writeMode WriteMode, pat
 		return SlotPointer{}, err
 	}
 
-	targetSlot, err := db.sortedTargetSlot(result.KvSlot, p.Target)
+	targetSlot, err := db.sortedTargetSlot(result.Entry, p.Target)
 	if err != nil {
 		return SlotPointer{}, err
 	}

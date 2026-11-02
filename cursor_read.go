@@ -219,12 +219,10 @@ func (c *ReadCursor) ReadKeyValuePair() (*ReadKVPairCursor, error) {
 	if err != nil {
 		return nil, err
 	}
-	keySlotPos := slotPtr.Slot.Value + c.DB.kvKeyOffset(slotPtr.Slot.Tag)
-	valueSlotPos := keySlotPos + int64(SlotLength)
 
 	return &ReadKVPairCursor{
-		ValueCursor: &ReadCursor{SlotPtr: SlotPointer{Position: &valueSlotPos, Slot: kvPair.ValueSlot}, DB: c.DB},
-		KeyCursor:   &ReadCursor{SlotPtr: SlotPointer{Position: &keySlotPos, Slot: kvPair.KeySlot}, DB: c.DB},
+		ValueCursor: &ReadCursor{SlotPtr: SlotPointer{Position: c.DB.kvValuePosition(slotPtr.Slot), Slot: kvPair.ValueSlot}, DB: c.DB},
+		KeyCursor:   &ReadCursor{SlotPtr: SlotPointer{Position: c.DB.kvKeyPosition(slotPtr.Slot), Slot: kvPair.KeySlot}, DB: c.DB},
 		Hash:        kvPair.Hash,
 	}, nil
 }

@@ -330,12 +330,30 @@ func KeyValuePairFromBytes(b []byte, hashSize int) KeyValuePair {
 // the key slot followed by the value slot.
 const SortedKeyValuePairLength = SlotLength * 2
 
-// where the key slot is in a TagKVPair or TagSortedKVPair entry. the value slot follows it.
-func (db *Database) kvKeyOffset(tag Tag) int64 {
-	if tag == TagKVPair {
-		return int64(db.Header.HashSize)
+func isKeyOnlyEntry(entry Slot) bool {
+	return entry.Tag == TagBytes || entry.Tag == TagShortBytes
+}
+
+// where a key-value entry's key slot is. a key-only entry has no separate slot.
+func (db *Database) kvKeyPosition(entry Slot) *int64 {
+	if isKeyOnlyEntry(entry) {
+		return nil
 	}
-	return 0
+	pos := entry.Value
+	if entry.Tag == TagKVPair {
+		pos += int64(db.Header.HashSize)
+	}
+	return &pos
+}
+
+// where a key-value entry's value slot is. it follows the key slot.
+func (db *Database) kvValuePosition(entry Slot) *int64 {
+	keyPos := db.kvKeyPosition(entry)
+	if keyPos == nil {
+		return nil
+	}
+	pos := *keyPos + int64(SlotLength)
+	return &pos
 }
 
 // decodes a TagKVPair or TagSortedKVPair entry at the core's position.
@@ -441,7 +459,7 @@ type BTreeSplitResult struct {
 }
 
 // SortedNode: a count-augmented B+tree keyed on byte strings, ordered
-// lexicographically. a leaf holds .sorted_kv_pair entries in ascending key
+// lexicographically. a leaf holds entries (see readKvPair) in ascending key
 // order; a branch holds child slots, separator slots (the smallest key in each
 // child's subtree; Separators[0] is an unused sentinel), and per-child subtree
 // counts.
@@ -473,12 +491,12 @@ type SortedSplit struct {
 	Separator Slot
 }
 
-// insert/replace result: the entry whose value to write, whether a new entry
+// insert/replace result: the entry to read or write, whether a new entry
 // was added (vs replacing), and the new right sibling if this node split
 type SortedInsertResult struct {
 	NodePtr int64
 	Count   int64
-	KvSlot  Slot
+	Entry   Slot
 	Added   bool
 	Split   *SortedSplit
 }
@@ -491,11 +509,6 @@ type SortedRemoveResult struct {
 type SortedSlot struct {
 	Slot     Slot
 	Position int64
-}
-
-type SortedEntry struct {
-	KvSlot  Slot
-	KeySlot Slot
 }
 
 // SortedMapGetTarget
@@ -2672,11 +2685,22 @@ func (db *Database) sortedWriteNode(node SortedNode, oldPtr, frozenAt int64) (in
 	return db.writeSortedNode(node)
 }
 
-func (db *Database) readKvPair(kvSlot Slot) (KeyValuePair, error) {
-	if err := db.Core.SeekTo(kvSlot.Value); err != nil {
+// reads a key-value entry, which is one of these:
+//  1. a TagBytes or TagShortBytes slot: the key by itself, stored directly in a
+//     sorted set's leaf. it has no value slot, so its value is empty.
+//  2. a TagKVPair or TagSortedKVPair slot: a pointer to the key and value.
+//
+// sorted maps and sets can be reinterpreted as each other, so one leaf can
+// contain both. always look at the entry's tag, not the container's. a cursor
+// doesn't know its container, so any bytes can be read as a key-only entry.
+func (db *Database) readKvPair(entry Slot) (KeyValuePair, error) {
+	if isKeyOnlyEntry(entry) {
+		return KeyValuePair{ValueSlot: Slot{}, KeySlot: entry, Hash: make([]byte, db.Header.HashSize)}, nil
+	}
+	if err := db.Core.SeekTo(entry.Value); err != nil {
 		return KeyValuePair{}, err
 	}
-	return decodeKvPair(db.Core, kvSlot.Tag, int(db.Header.HashSize))
+	return decodeKvPair(db.Core, entry.Tag, int(db.Header.HashSize))
 }
 
 // writes a TagKVPair or TagSortedKVPair entry at the end and returns its slot
@@ -2873,25 +2897,18 @@ func (db *Database) writeKey(key []byte) (Slot, error) {
 	return Slot{Value: pos, Tag: TagBytes}, nil
 }
 
-// materialize a new leaf entry: write the key bytes and a key-value pair with
-// an empty value (the caller fills it in). navigation is by key bytes, so the
-// entry has no hash.
-func (db *Database) sortedNewEntry(key []byte) (SortedEntry, error) {
-	keySlot, err := db.writeKey(key)
-	if err != nil {
-		return SortedEntry{}, err
-	}
-	kvSlot, err := db.writeKvPair(TagSortedKVPair, KeyValuePair{ValueSlot: Slot{}, KeySlot: keySlot, Hash: make([]byte, db.Header.HashSize)})
-	if err != nil {
-		return SortedEntry{}, err
-	}
-	return SortedEntry{KvSlot: kvSlot, KeySlot: keySlot}, nil
+// wraps a key slot in a new key-value pair with an empty value (the caller
+// fills it in). navigation is by key bytes, so the pair has no hash.
+func (db *Database) writeSortedPair(keySlot Slot) (Slot, error) {
+	return db.writeKvPair(TagSortedKVPair, KeyValuePair{ValueSlot: Slot{}, KeySlot: keySlot, Hash: make([]byte, db.Header.HashSize)})
 }
 
 // insert key (or locate it for replacement) within the subtree at nodePtr,
-// path-copying nodes and maintaining separators + counts. the caller writes the value
-// of the returned entry.
-func (db *Database) sortedPut(nodePtr int64, key []byte, frozenAt int64) (SortedInsertResult, error) {
+// path-copying nodes and maintaining separators + counts. the caller writes the
+// value of the returned entry, unless keyOnly is true. in that case, a new key
+// is stored as a key-only entry, and an existing entry is left alone. otherwise,
+// the returned entry is a key-value pair with a writeable value.
+func (db *Database) sortedPut(nodePtr int64, key []byte, keyOnly bool, frozenAt int64) (SortedInsertResult, error) {
 	node, err := db.readSortedNode(nodePtr)
 	if err != nil {
 		return SortedInsertResult{}, err
@@ -2921,36 +2938,51 @@ func (db *Database) sortedPut(nodePtr int64, key []byte, frozenAt int64) (Sorted
 		}
 
 		if found {
-			// replace: return a writable value slot, copy-on-writing the kv_pair if it
-			// belongs to a past moment
-			leaf := node
-			kvSlot := node.Entries[idx]
-			if !db.btreeReusable(kvSlot.Value, frozenAt) {
-				kv, err := db.readKvPair(kvSlot)
-				if err != nil {
-					return SortedInsertResult{}, err
-				}
-				kvSlot, err = db.writeKvPair(kvSlot.Tag, kv)
-				if err != nil {
-					return SortedInsertResult{}, err
-				}
-				leaf.Entries[idx] = kvSlot
+			if keyOnly {
+				return SortedInsertResult{NodePtr: nodePtr, Count: int64(node.Num), Entry: node.Entries[idx], Added: false}, nil
 			}
+
+			// replace: return a writable value slot, moving a key-only entry into a pair
+			// or copy-on-writing a pair from a past moment
+			leaf := node
+			entry := node.Entries[idx]
+			if isKeyOnlyEntry(entry) {
+				entry, err = db.writeSortedPair(entry)
+				if err != nil {
+					return SortedInsertResult{}, err
+				}
+			} else if !db.btreeReusable(entry.Value, frozenAt) {
+				kv, err := db.readKvPair(entry)
+				if err != nil {
+					return SortedInsertResult{}, err
+				}
+				entry, err = db.writeKvPair(entry.Tag, kv)
+				if err != nil {
+					return SortedInsertResult{}, err
+				}
+			}
+			leaf.Entries[idx] = entry
 			ptr, err := db.sortedWriteNode(leaf, nodePtr, frozenAt)
 			if err != nil {
 				return SortedInsertResult{}, err
 			}
-			return SortedInsertResult{NodePtr: ptr, Count: int64(node.Num), KvSlot: kvSlot, Added: false}, nil
+			return SortedInsertResult{NodePtr: ptr, Count: int64(node.Num), Entry: entry, Added: false}, nil
 		}
 
 		// insert a new entry at idx
-		entry, err := db.sortedNewEntry(key)
+		entry, err := db.writeKey(key)
 		if err != nil {
 			return SortedInsertResult{}, err
 		}
+		if !keyOnly {
+			entry, err = db.writeSortedPair(entry)
+			if err != nil {
+				return SortedInsertResult{}, err
+			}
+		}
 		entries := make([]Slot, 0, BTreeSlotCount+1)
 		entries = append(entries, node.Entries[:idx]...)
-		entries = append(entries, entry.KvSlot)
+		entries = append(entries, entry)
 		entries = append(entries, node.Entries[idx:node.Num]...)
 		total := node.Num + 1
 
@@ -2961,7 +2993,7 @@ func (db *Database) sortedPut(nodePtr int64, key []byte, frozenAt int64) (Sorted
 			if err != nil {
 				return SortedInsertResult{}, err
 			}
-			return SortedInsertResult{NodePtr: ptr, Count: int64(total), KvSlot: entry.KvSlot, Added: true}, nil
+			return SortedInsertResult{NodePtr: ptr, Count: int64(total), Entry: entry, Added: true}, nil
 		}
 
 		// overflow: split into two leaves; the new sibling's separator is the key of its
@@ -2985,7 +3017,7 @@ func (db *Database) sortedPut(nodePtr int64, key []byte, frozenAt int64) (Sorted
 		if err != nil {
 			return SortedInsertResult{}, err
 		}
-		return SortedInsertResult{NodePtr: leftPtr, Count: int64(leftN), KvSlot: entry.KvSlot, Added: true, Split: &SortedSplit{NodePtr: rightPtr, Count: int64(rightN), Separator: separator}}, nil
+		return SortedInsertResult{NodePtr: leftPtr, Count: int64(leftN), Entry: entry, Added: true, Split: &SortedSplit{NodePtr: rightPtr, Count: int64(rightN), Separator: separator}}, nil
 	case BTreeKindBranch:
 		i := 0
 		for i+1 < node.Num {
@@ -2999,9 +3031,13 @@ func (db *Database) sortedPut(nodePtr int64, key []byte, frozenAt int64) (Sorted
 				break
 			}
 		}
-		child, err := db.sortedPut(node.Children[i].Value, key, frozenAt)
+		child, err := db.sortedPut(node.Children[i].Value, key, keyOnly, frozenAt)
 		if err != nil {
 			return SortedInsertResult{}, err
+		}
+		// nothing below changed, so don't copy this node for no reason
+		if !child.Added && child.NodePtr == node.Children[i].Value {
+			return SortedInsertResult{NodePtr: nodePtr, Count: node.SubtreeCount(), Entry: child.Entry, Added: false}, nil
 		}
 
 		children := make([]Slot, node.Num, BTreeSlotCount+1)
@@ -3037,7 +3073,7 @@ func (db *Database) sortedPut(nodePtr int64, key []byte, frozenAt int64) (Sorted
 			if err != nil {
 				return SortedInsertResult{}, err
 			}
-			return SortedInsertResult{NodePtr: ptr, Count: branch.SubtreeCount(), KvSlot: child.KvSlot, Added: child.Added}, nil
+			return SortedInsertResult{NodePtr: ptr, Count: branch.SubtreeCount(), Entry: child.Entry, Added: child.Added}, nil
 		}
 
 		// overflow: split into two branches; the new sibling's separator is the smallest
@@ -3061,7 +3097,7 @@ func (db *Database) sortedPut(nodePtr int64, key []byte, frozenAt int64) (Sorted
 		if err != nil {
 			return SortedInsertResult{}, err
 		}
-		return SortedInsertResult{NodePtr: leftPtr, Count: left.SubtreeCount(), KvSlot: child.KvSlot, Added: child.Added, Split: &SortedSplit{NodePtr: rightPtr, Count: right.SubtreeCount(), Separator: separator}}, nil
+		return SortedInsertResult{NodePtr: leftPtr, Count: left.SubtreeCount(), Entry: child.Entry, Added: child.Added, Split: &SortedSplit{NodePtr: rightPtr, Count: right.SubtreeCount(), Separator: separator}}, nil
 	}
 	return SortedInsertResult{}, ErrUnreachable
 }
@@ -3154,19 +3190,22 @@ func (db *Database) sortedGrowRoot(result SortedInsertResult) (int64, error) {
 // turn a located/inserted entry into the slot for the requested target. only
 // the value is writeable (that is how put works); the key and the entry
 // pointer are immutable, so they are returned with no writeable position.
-func (db *Database) sortedTargetSlot(kvSlot Slot, target SortedMapGetTarget) (SlotPointer, error) {
-	kv, err := db.readKvPair(kvSlot)
-	if err != nil {
-		return SlotPointer{}, err
-	}
+func (db *Database) sortedTargetSlot(entry Slot, target SortedMapGetTarget) (SlotPointer, error) {
 	switch target.(type) {
 	case SortedMapGetKVPair:
-		return SlotPointer{Position: nil, Slot: kvSlot}, nil
+		return SlotPointer{Position: nil, Slot: entry}, nil
 	case SortedMapGetKey:
+		kv, err := db.readKvPair(entry)
+		if err != nil {
+			return SlotPointer{}, err
+		}
 		return SlotPointer{Position: nil, Slot: kv.KeySlot}, nil
 	case SortedMapGetValue:
-		pos := kvSlot.Value + db.kvKeyOffset(kvSlot.Tag) + SlotLength
-		return SlotPointer{Position: &pos, Slot: kv.ValueSlot}, nil
+		kv, err := db.readKvPair(entry)
+		if err != nil {
+			return SlotPointer{}, err
+		}
+		return SlotPointer{Position: db.kvValuePosition(entry), Slot: kv.ValueSlot}, nil
 	default:
 		return SlotPointer{}, ErrUnexpectedTag
 	}

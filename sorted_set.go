@@ -5,7 +5,8 @@ import (
 	"iter"
 )
 
-// ReadSortedSet - a sorted set of byte-string keys (a SortedMap with no values).
+// ReadSortedSet - a sorted set of byte-string keys (a SortedMap with no values). keys
+// are stored directly in the leaves, which avoids a key-value pair per entry.
 
 type ReadSortedSet struct {
 	Cursor *ReadCursor
