@@ -93,6 +93,15 @@ func (a *WriteLinkedArrayList) AppendCursor() (*WriteCursor, error) {
 	return a.writeCursor.WritePath([]PathPart{LinkedArrayListAppend{}})
 }
 
+func (a *WriteLinkedArrayList) AppendContext(data WriteableData, fn ContextFunction) error {
+	_, err := a.writeCursor.WritePath([]PathPart{
+		LinkedArrayListAppend{},
+		WriteData{Data: data},
+		Context{Function: fn},
+	})
+	return err
+}
+
 func (a *WriteLinkedArrayList) Slice(offset, size int64) error {
 	_, err := a.writeCursor.WritePath([]PathPart{LinkedArrayListSlicePart{Offset: offset, Size: size}})
 	return err
