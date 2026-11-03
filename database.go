@@ -506,11 +506,6 @@ type SortedRemoveResult struct {
 	Found   bool
 }
 
-type SortedSlot struct {
-	Slot     Slot
-	Position int64
-}
-
 // SortedMapGetTarget
 
 type SortedMapGetTarget interface {
@@ -2011,26 +2006,71 @@ func (db *Database) btreeNewRoot() (int64, error) {
 	return db.writeBTreeNode(BTreeNode{Kind: BTreeKindLeaf, Num: 0})
 }
 
-// descend to the value slot at the given rank (0-based), returning a pointer to it (its
-// file position and current slot).
-func (db *Database) readBTreeSlot(rootPtr, rank int64) (SlotPointer, error) {
+// descend to the slot at the given rank (0-based), decoding only the counts and slot
+// needed from each node. linked array lists and sorted maps/sets share this because
+// their leaves are identical and their branches start with the children and end with
+// the counts, so only the size differs.
+func (db *Database) descendByRank(rootPtr, rank int64, branchBlockSize int) (SlotPointer, error) {
+	countsPos := branchBlockSize - BTreeSlotCount*8
+	block := make([]byte, branchBlockSize)
+	length, err := db.Core.Length()
+	if err != nil {
+		return SlotPointer{}, err
+	}
 	nodePtr := rootPtr
 	rem := rank
 	for {
-		node, err := db.readBTreeNode(nodePtr)
-		if err != nil {
+		// a leaf may be at the end of the db, so there may not be a whole branch's
+		// worth of bytes to read
+		size := int(min(int64(branchBlockSize), length-nodePtr))
+		if size < BTreeLeafBlockSize {
+			return SlotPointer{}, ErrEndOfStream
+		}
+		if err := db.Core.SeekTo(nodePtr); err != nil {
 			return SlotPointer{}, err
 		}
-		if node.Kind == BTreeKindLeaf {
-			position := nodePtr + BTreeNodeHeaderSize + rem*SlotLength
-			return SlotPointer{Position: &position, Slot: node.Values[rem]}, nil
+		if err := db.Core.Read(block[:size]); err != nil {
+			return SlotPointer{}, err
 		}
+		if block[0] > byte(BTreeKindBranch) {
+			return SlotPointer{}, ErrInvalidBTreeNodeKind
+		}
+		kind := BTreeNodeKind(block[0])
+		num := int(block[1])
+		if num > BTreeSlotCount {
+			return SlotPointer{}, ErrInvalidBTreeNode
+		}
+		if kind == BTreeKindBranch && size < branchBlockSize {
+			return SlotPointer{}, ErrEndOfStream
+		}
+
 		i := 0
-		for i+1 < node.Num && rem >= node.Counts[i] {
-			rem -= node.Counts[i]
-			i++
+		if kind == BTreeKindLeaf {
+			if rem >= int64(num) {
+				return SlotPointer{}, ErrInvalidBTreeNode
+			}
+			i = int(rem)
+		} else {
+			for i+1 < num {
+				count := int64(binary.BigEndian.Uint64(block[countsPos+i*8:]))
+				if rem < count {
+					break
+				}
+				rem -= count
+				i++
+			}
 		}
-		nodePtr = node.Children[i].Value
+
+		slotPos := BTreeNodeHeaderSize + i*SlotLength
+		slot := SlotFromBytes([SlotLength]byte(block[slotPos : slotPos+SlotLength]))
+		if err := slot.Tag.validate(); err != nil {
+			return SlotPointer{}, err
+		}
+		if kind == BTreeKindLeaf {
+			position := nodePtr + int64(slotPos)
+			return SlotPointer{Position: &position, Slot: slot}, nil
+		}
+		nodePtr = slot.Value
 	}
 }
 
@@ -2803,7 +2843,7 @@ func (db *Database) sortedLeafSearch(node *SortedNode, key []byte) (int, bool, e
 }
 
 // descend by key to the matching leaf entry, or nil
-func (db *Database) sortedGet(rootPtr int64, key []byte) (*SortedSlot, error) {
+func (db *Database) sortedGet(rootPtr int64, key []byte) (*Slot, error) {
 	nodePtr := rootPtr
 	for {
 		node, err := db.readSortedNode(nodePtr)
@@ -2818,34 +2858,12 @@ func (db *Database) sortedGet(rootPtr int64, key []byte) (*SortedSlot, error) {
 			if !found {
 				return nil, nil
 			}
-			pos := nodePtr + BTreeNodeHeaderSize + int64(idx)*SlotLength
-			return &SortedSlot{Slot: node.Entries[idx], Position: pos}, nil
+			entry := node.Entries[idx]
+			return &entry, nil
 		}
 		i, err := db.sortedBranchSearch(&node, key)
 		if err != nil {
 			return nil, err
-		}
-		nodePtr = node.Children[i].Value
-	}
-}
-
-// descend by rank to the leaf entry at the given 0-based index
-func (db *Database) sortedGetByIndex(rootPtr, rank int64) (SortedSlot, error) {
-	nodePtr := rootPtr
-	rem := rank
-	for {
-		node, err := db.readSortedNode(nodePtr)
-		if err != nil {
-			return SortedSlot{}, err
-		}
-		if node.Kind == BTreeKindLeaf {
-			pos := nodePtr + BTreeNodeHeaderSize + rem*SlotLength
-			return SortedSlot{Slot: node.Entries[rem], Position: pos}, nil
-		}
-		i := 0
-		for i+1 < node.Num && rem >= node.Counts[i] {
-			rem -= node.Counts[i]
-			i++
 		}
 		nodePtr = node.Children[i].Value
 	}

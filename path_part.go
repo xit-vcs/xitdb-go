@@ -404,7 +404,7 @@ func (p LinkedArrayListGet) readSlotPointer(db *Database, writeMode WriteMode, p
 	}
 
 	if writeMode == ReadOnly {
-		finalSlotPtr, err := db.readBTreeSlot(header.RootPtr, rank)
+		finalSlotPtr, err := db.descendByRank(header.RootPtr, rank, BTreeBranchBlockSize)
 		if err != nil {
 			return SlotPointer{}, err
 		}
@@ -1155,14 +1155,14 @@ func (p SortedMapGetPart) readSlotPointer(db *Database, writeMode WriteMode, pat
 	}
 
 	if writeMode == ReadOnly {
-		found, err := db.sortedGet(header.RootPtr, key)
+		entry, err := db.sortedGet(header.RootPtr, key)
 		if err != nil {
 			return SlotPointer{}, err
 		}
-		if found == nil {
+		if entry == nil {
 			return SlotPointer{}, ErrKeyNotFound
 		}
-		targetSlot, err := db.sortedTargetSlot(found.Slot, p.Target)
+		targetSlot, err := db.sortedTargetSlot(*entry, p.Target)
 		if err != nil {
 			return SlotPointer{}, err
 		}
@@ -1247,13 +1247,11 @@ func (p SortedMapGetIndexPart) readSlotPointer(db *Database, writeMode WriteMode
 		rank = index
 	}
 
-	found, err := db.sortedGetByIndex(header.RootPtr, rank)
+	// return the entry so the caller can read key and value
+	targetSlot, err := db.descendByRank(header.RootPtr, rank, SortedBranchBlockSize)
 	if err != nil {
 		return SlotPointer{}, err
 	}
-	// return the entry so the caller can read key and value
-	pos := found.Position
-	targetSlot := SlotPointer{Position: &pos, Slot: found.Slot}
 	return db.readSlotPointer(writeMode, path, pathI+1, targetSlot, frozenAt)
 }
 
