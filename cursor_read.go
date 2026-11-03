@@ -766,37 +766,20 @@ func sortedStackFromKey(cursor *ReadCursor, rootPtr int64, key []byte) ([]iterLe
 		}
 		position := nodePtr + BTreeNodeHeaderSize
 		if node.Kind == BTreeKindLeaf {
-			li := node.Num
-			for j := 0; j < node.Num; j++ {
-				kv, err := cursor.DB.readKvPair(node.Entries[j])
-				if err != nil {
-					return nil, 0, err
-				}
-				c, err := cursor.DB.compareKey(kv.KeySlot, key)
-				if err != nil {
-					return nil, 0, err
-				}
-				if c >= 0 {
-					li = j
-					break
-				}
+			li, _, err := cursor.DB.sortedLeafSearch(&node, key)
+			if err != nil {
+				return nil, 0, err
 			}
 			before += int64(li)
 			stack = append(stack, iterLevel{position: position, block: node.Entries, index: byte(li)})
 			return stack, before, nil
 		}
-		i := 0
-		for i+1 < node.Num {
-			c, err := cursor.DB.compareKey(node.Separators[i+1], key)
-			if err != nil {
-				return nil, 0, err
-			}
-			if c <= 0 {
-				before += node.Counts[i]
-				i++
-			} else {
-				break
-			}
+		i, err := cursor.DB.sortedBranchSearch(&node, key)
+		if err != nil {
+			return nil, 0, err
+		}
+		for _, c := range node.Counts[:i] {
+			before += c
 		}
 		stack = append(stack, iterLevel{position: position, block: node.Children, index: byte(i)})
 		nodePtr = node.Children[i].Value

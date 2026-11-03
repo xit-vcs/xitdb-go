@@ -2755,6 +2755,53 @@ func (db *Database) compareKey(keySlot Slot, target []byte) (int, error) {
 	}
 }
 
+// binary search for the child whose subtree may contain key: the last child whose
+// separator is <= key, or the first child if there is none. Separators[0] is an
+// unused sentinel, so it is never compared.
+func (db *Database) sortedBranchSearch(node *SortedNode, key []byte) (int, error) {
+	lo, hi := 1, node.Num
+	for lo < hi {
+		mid := (lo + hi) / 2
+		c, err := db.compareKey(node.Separators[mid], key)
+		if err != nil {
+			return 0, err
+		}
+		if c <= 0 {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo - 1, nil
+}
+
+// binary search for key among a leaf's entries. if it isn't found, the index is where
+// it would be inserted. since keys are unique, the index is the number of entries less
+// than key either way.
+func (db *Database) sortedLeafSearch(node *SortedNode, key []byte) (int, bool, error) {
+	lo, hi := 0, node.Num
+	for lo < hi {
+		mid := (lo + hi) / 2
+		kv, err := db.readKvPair(node.Entries[mid])
+		if err != nil {
+			return 0, false, err
+		}
+		c, err := db.compareKey(kv.KeySlot, key)
+		if err != nil {
+			return 0, false, err
+		}
+		if c == 0 {
+			return mid, true, nil
+		}
+		if c < 0 {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo, false, nil
+}
+
 // descend by key to the matching leaf entry, or nil
 func (db *Database) sortedGet(rootPtr int64, key []byte) (*SortedSlot, error) {
 	nodePtr := rootPtr
@@ -2764,37 +2811,19 @@ func (db *Database) sortedGet(rootPtr int64, key []byte) (*SortedSlot, error) {
 			return nil, err
 		}
 		if node.Kind == BTreeKindLeaf {
-			for i := 0; i < node.Num; i++ {
-				entry := node.Entries[i]
-				kv, err := db.readKvPair(entry)
-				if err != nil {
-					return nil, err
-				}
-				cmp, err := db.compareKey(kv.KeySlot, key)
-				if err != nil {
-					return nil, err
-				}
-				if cmp == 0 {
-					pos := nodePtr + BTreeNodeHeaderSize + int64(i)*SlotLength
-					return &SortedSlot{Slot: entry, Position: pos}, nil
-				}
-				if cmp > 0 {
-					return nil, nil
-				}
-			}
-			return nil, nil
-		}
-		i := 0
-		for i+1 < node.Num {
-			c, err := db.compareKey(node.Separators[i+1], key)
+			idx, found, err := db.sortedLeafSearch(&node, key)
 			if err != nil {
 				return nil, err
 			}
-			if c <= 0 {
-				i++
-			} else {
-				break
+			if !found {
+				return nil, nil
 			}
+			pos := nodePtr + BTreeNodeHeaderSize + int64(idx)*SlotLength
+			return &SortedSlot{Slot: node.Entries[idx], Position: pos}, nil
+		}
+		i, err := db.sortedBranchSearch(&node, key)
+		if err != nil {
+			return nil, err
 		}
 		nodePtr = node.Children[i].Value
 	}
@@ -2832,35 +2861,18 @@ func (db *Database) sortedRank(rootPtr int64, key []byte) (int64, error) {
 			return 0, err
 		}
 		if node.Kind == BTreeKindLeaf {
-			for i := 0; i < node.Num; i++ {
-				kv, err := db.readKvPair(node.Entries[i])
-				if err != nil {
-					return 0, err
-				}
-				c, err := db.compareKey(kv.KeySlot, key)
-				if err != nil {
-					return 0, err
-				}
-				if c < 0 {
-					rank++
-				} else {
-					break
-				}
-			}
-			return rank, nil
-		}
-		i := 0
-		for i+1 < node.Num {
-			c, err := db.compareKey(node.Separators[i+1], key)
+			idx, _, err := db.sortedLeafSearch(&node, key)
 			if err != nil {
 				return 0, err
 			}
-			if c <= 0 {
-				rank += node.Counts[i]
-				i++
-			} else {
-				break
-			}
+			return rank + int64(idx), nil
+		}
+		i, err := db.sortedBranchSearch(&node, key)
+		if err != nil {
+			return 0, err
+		}
+		for _, c := range node.Counts[:i] {
+			rank += c
 		}
 		nodePtr = node.Children[i].Value
 	}
@@ -2915,26 +2927,9 @@ func (db *Database) sortedPut(nodePtr int64, key []byte, keyOnly bool, frozenAt 
 	}
 	switch node.Kind {
 	case BTreeKindLeaf:
-		idx := node.Num
-		found := false
-		for i := 0; i < node.Num; i++ {
-			kv, err := db.readKvPair(node.Entries[i])
-			if err != nil {
-				return SortedInsertResult{}, err
-			}
-			cmp, err := db.compareKey(kv.KeySlot, key)
-			if err != nil {
-				return SortedInsertResult{}, err
-			}
-			if cmp == 0 {
-				idx = i
-				found = true
-				break
-			}
-			if cmp > 0 {
-				idx = i
-				break
-			}
+		idx, found, err := db.sortedLeafSearch(&node, key)
+		if err != nil {
+			return SortedInsertResult{}, err
 		}
 
 		if found {
@@ -3019,17 +3014,9 @@ func (db *Database) sortedPut(nodePtr int64, key []byte, keyOnly bool, frozenAt 
 		}
 		return SortedInsertResult{NodePtr: leftPtr, Count: int64(leftN), Entry: entry, Added: true, Split: &SortedSplit{NodePtr: rightPtr, Count: int64(rightN), Separator: separator}}, nil
 	case BTreeKindBranch:
-		i := 0
-		for i+1 < node.Num {
-			c, err := db.compareKey(node.Separators[i+1], key)
-			if err != nil {
-				return SortedInsertResult{}, err
-			}
-			if c <= 0 {
-				i++
-			} else {
-				break
-			}
+		i, err := db.sortedBranchSearch(&node, key)
+		if err != nil {
+			return SortedInsertResult{}, err
 		}
 		child, err := db.sortedPut(node.Children[i].Value, key, keyOnly, frozenAt)
 		if err != nil {
@@ -3111,25 +3098,9 @@ func (db *Database) sortedRemove(nodePtr int64, key []byte, frozenAt int64) (Sor
 	}
 	switch node.Kind {
 	case BTreeKindLeaf:
-		idx := node.Num
-		found := false
-		for i := 0; i < node.Num; i++ {
-			kv, err := db.readKvPair(node.Entries[i])
-			if err != nil {
-				return SortedRemoveResult{}, err
-			}
-			cmp, err := db.compareKey(kv.KeySlot, key)
-			if err != nil {
-				return SortedRemoveResult{}, err
-			}
-			if cmp == 0 {
-				idx = i
-				found = true
-				break
-			}
-			if cmp > 0 {
-				break
-			}
+		idx, found, err := db.sortedLeafSearch(&node, key)
+		if err != nil {
+			return SortedRemoveResult{}, err
 		}
 		if !found {
 			return SortedRemoveResult{NodePtr: nodePtr, Found: false}, nil
@@ -3143,17 +3114,9 @@ func (db *Database) sortedRemove(nodePtr int64, key []byte, frozenAt int64) (Sor
 		}
 		return SortedRemoveResult{NodePtr: ptr, Found: true}, nil
 	case BTreeKindBranch:
-		i := 0
-		for i+1 < node.Num {
-			c, err := db.compareKey(node.Separators[i+1], key)
-			if err != nil {
-				return SortedRemoveResult{}, err
-			}
-			if c <= 0 {
-				i++
-			} else {
-				break
-			}
+		i, err := db.sortedBranchSearch(&node, key)
+		if err != nil {
+			return SortedRemoveResult{}, err
 		}
 		child, err := db.sortedRemove(node.Children[i].Value, key, frozenAt)
 		if err != nil {
