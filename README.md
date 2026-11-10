@@ -17,6 +17,7 @@
 * Reads never block writes, and a database can be read from multiple threads/processes without locks.
 * No query engine of any kind. You just write data structures (primarily an `ArrayList` and `HashMap`) that can be nested arbitrarily.
 * No dependencies besides the Go standard library (requires Go 1.23+).
+* Available [on pkg.go.dev](https://pkg.go.dev/github.com/xit-vcs/xitdb-go).
 
 This database was originally made for the [xit version control system](https://github.com/xit-vcs/xit), but I bet it has a lot of potential for other projects. The combination of being immutable and having an API similar to in-memory data structures is pretty powerful. Consider using it instead of SQLite for your Go projects: it's simpler, it's pure Go, and it creates no impedance mismatch with your program the way SQL databases do. Check out [xitdb.net](https://xitdb.net/go.html) and the video [My SQLite killer was a happy accident](https://www.youtube.com/watch?v=YRUF-EaTFFM).
 
