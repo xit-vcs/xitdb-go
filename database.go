@@ -14,7 +14,27 @@ import (
 )
 
 const (
-	Version         uint16 = 1
+	// the database version. bump for format-breaking changes.
+	//
+	// version 0:
+	//   the design that xitdb had for its first few years of life.
+	//   this format was *mostly* append-only, but the top-level
+	//   data structure was mutable, making replication impractical.
+	//   support has been completely removed because xitdb had
+	//   basically one user for the duration of this version.
+	// version 1:
+	//   introduces the root header, and a trailer at the end of
+	//   every commit. the top-level data structure is now fully
+	//   immutable, which means the *only* thing mutated is the
+	//   root header. this made replication trivial, and as a
+	//   side benefit, even top-level hash maps are transactional.
+	// version 2:
+	//   fixes a small flaw in the version 1 root header that made
+	//   tearing possible when reading during a commit. the file
+	//   size was at a misaligned offset, which on typical CPUs
+	//   meant that it could contain a torn value leading to a
+	//   read error. now it is stored at offset 24.
+	Version         uint16 = 2
 	BitCount               = 4
 	SlotCount              = 1 << BitCount
 	Mask            int64  = SlotCount - 1
@@ -113,7 +133,7 @@ func (h Header) Validate() error {
 	if h.MagicNumber != MagicNumber {
 		return ErrInvalidDatabase
 	}
-	if h.Version != Version {
+	if h.Version != 1 && h.Version != Version {
 		return ErrInvalidVersion
 	}
 	return nil
@@ -156,41 +176,22 @@ func (h ArrayListHeader) WithPtr(ptr int64) ArrayListHeader {
 // the database header is followed by the root header. the top-level data
 // is a root slot of any type, and every write to it is a copy-on-write
 // transaction that appends a trailer holding the new root slot. the root
-// header only caches the latest trailer, so every other committed byte is
-// immutable, and a replica stays in sync by copying the bytes it doesn't have.
-const (
-	RootHeaderStart         = HeaderLength
-	RootHeaderEnd           = RootHeaderStart + RootHeaderLength
-	rootHeaderFileSizeStart = RootHeaderStart + SlotLength
-)
+// header only says where the latest trailer ends, so every other committed
+// byte is immutable, and a replica stays in sync by copying the bytes it
+// doesn't have.
+const RootHeaderStart = HeaderLength
 
-// rewritten at every commit, as a cache of the latest trailer.
-// the root slot comes first on disk.
-// we only read FileSize, which lets us read the trailer. other xitdb
-// implementations may read the whole header to avoid that extra read,
-// but that increases the risk of a concurrent commit tearing it.
-const RootHeaderLength = SlotLength + 8
+// the root header is the size of the committed bytes. a commit rewrites it
+// in place, and a concurrent read from another Database must not see it
+// half written. so it is written by itself, and it starts at a multiple of
+// 8 bytes, which lets a CPU read and write it as a single unit. the bytes
+// before it are padding.
+const alignedFileSizeStart = (RootHeaderStart + 7) / 8 * 8
 
+// the size of the committed bytes, and the root slot from the trailer that ends them
 type RootHeader struct {
 	FileSize int64
 	Root     Slot
-}
-
-func (h RootHeader) ToBytes() [RootHeaderLength]byte {
-	var buf [RootHeaderLength]byte
-	root := h.Root.ToBytes()
-	copy(buf[0:SlotLength], root[:])
-	binary.BigEndian.PutUint64(buf[SlotLength:], uint64(h.FileSize))
-	return buf
-}
-
-func RootHeaderFromBytes(b []byte) RootHeader {
-	var root [SlotLength]byte
-	copy(root[:], b[0:SlotLength])
-	return RootHeader{
-		FileSize: int64(binary.BigEndian.Uint64(b[SlotLength : SlotLength+8])),
-		Root:     SlotFromBytes(root),
-	}
 }
 
 // RootTrailer
@@ -622,7 +623,7 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 		}
 		// write the root header and commit an empty root, so the
 		// file ends with a trailer like after any transaction
-		rootHeader := RootHeader{FileSize: 0, Root: Slot{}}.ToBytes()
+		var rootHeader [alignedFileSizeStart + 8 - RootHeaderStart]byte
 		if err := core.Write(rootHeader[:]); err != nil {
 			return nil, fmt.Errorf("write root header: %w", err)
 		}
@@ -761,22 +762,25 @@ func (db *Database) ReadCommitted(start, end int64, w io.Writer) error {
 	if start < 0 || start > end || end > committedSize {
 		return ErrInvalidRange
 	}
-	if start > 0 && start < RootHeaderEnd {
+	fileSizeStart := db.fileSizeStart()
+	dataStart := fileSizeStart + 8
+	if start > 0 && start < dataStart {
 		return ErrInvalidRange
 	}
 	if start == 0 {
-		trailer, err := db.readRootTrailer(end)
-		if err != nil {
+		// the bytes must end with a trailer
+		if _, err := db.readRootTrailer(end); err != nil {
 			return err
 		}
-		if err := db.streamBytes(w, 0, RootHeaderStart); err != nil {
+		if err := db.streamBytes(w, 0, fileSizeStart); err != nil {
 			return err
 		}
-		rootHeader := RootHeader{FileSize: end, Root: trailer.Root}.ToBytes()
-		if _, err := w.Write(rootHeader[:]); err != nil {
+		var fileSize [8]byte
+		binary.BigEndian.PutUint64(fileSize[:], uint64(end))
+		if _, err := w.Write(fileSize[:]); err != nil {
 			return err
 		}
-		return db.streamBytes(w, RootHeaderEnd, end-RootHeaderEnd)
+		return db.streamBytes(w, dataStart, end-dataStart)
 	}
 	return db.streamBytes(w, start, end-start)
 }
@@ -853,14 +857,13 @@ func (db *Database) ApplyReplicated(start int64, r io.Reader, length int64) erro
 		}
 	} else if length > 0 {
 		// the bytes must end with a trailer. update the root header to match it.
-		trailer, err := db.readRootTrailer(start + length)
-		if err != nil {
+		if _, err := db.readRootTrailer(start + length); err != nil {
 			return err
 		}
 		if err := db.Core.Sync(); err != nil {
 			return err
 		}
-		if err := db.writeRootHeader(trailer.Root); err != nil {
+		if err := db.writeRootHeader(); err != nil {
 			return err
 		}
 		if err := db.Core.Sync(); err != nil {
@@ -1008,9 +1011,19 @@ func (db *Database) truncate() error {
 	return nil
 }
 
+// where the root header's file size is. the committed data starts after it.
+// version 1 has a copy of the root slot before it, which isn't used or updated.
+func (db *Database) fileSizeStart() int64 {
+	if db.Header.Version == 1 {
+		return RootHeaderStart + SlotLength
+	}
+	return alignedFileSizeStart
+}
+
 // the file size from the root header, and the root slot from the trailer it points to
 func (db *Database) readRootHeader() (RootHeader, error) {
-	if err := db.Core.SeekTo(rootHeaderFileSizeStart); err != nil {
+	fileSizeStart := db.fileSizeStart()
+	if err := db.Core.SeekTo(fileSizeStart); err != nil {
 		return RootHeader{}, err
 	}
 	var b [8]byte
@@ -1018,7 +1031,7 @@ func (db *Database) readRootHeader() (RootHeader, error) {
 		return RootHeader{}, err
 	}
 	fileSize := int64(binary.BigEndian.Uint64(b[:]))
-	minimumSize := int64(RootHeaderEnd + RootTrailerLength)
+	minimumSize := fileSizeStart + 8 + RootTrailerLength
 	if fileSize < minimumSize {
 		return RootHeader{}, ErrInvalidDatabase
 	}
@@ -1103,21 +1116,21 @@ func (db *Database) commitRoot(root Slot, commitID uint64) error {
 		return err
 	}
 
-	return db.writeRootHeader(root)
+	return db.writeRootHeader()
 }
 
-// points the root header at root, which must be in the trailer that ends
-// the file.
-func (db *Database) writeRootHeader(root Slot) error {
+// points the root header at the trailer that ends the file.
+func (db *Database) writeRootHeader() error {
 	fileSize, err := db.Core.Length()
 	if err != nil {
 		return err
 	}
-	if err := db.Core.SeekTo(RootHeaderStart); err != nil {
+	if err := db.Core.SeekTo(db.fileSizeStart()); err != nil {
 		return err
 	}
-	header := RootHeader{FileSize: fileSize, Root: root}.ToBytes()
-	return db.Core.Write(header[:])
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], uint64(fileSize))
+	return db.Core.Write(b[:])
 }
 
 // whether this slot pointer is the root of the database

@@ -4195,12 +4195,12 @@ func replicate(t *testing.T, source, replica *Database) {
 }
 
 // checks that no committed byte has changed since committed was read,
-// except the root header (the root slot and file size after the database
+// except the root header (the padding and file size after the database
 // header). then replicates and checks that the replica is identical.
 func expectAppendOnlyAndReplicate(t *testing.T, source, replica *Database, committed *[]byte) {
 	t.Helper()
 	rootHeaderStart := HeaderLength
-	rootHeaderEnd := rootHeaderStart + 17
+	rootHeaderEnd := rootHeaderStart + 12
 	{
 		current := readCommittedBytes(t, source, 0)
 		if len(current) < len(*committed) {
@@ -4292,20 +4292,20 @@ func testReplication(t *testing.T, sourceCore, replicaCore Core) {
 	// a new database is its header (which ends with its file ID), its root
 	// header, and the trailer for its empty root: the slot (9 zero bytes), the commit ID (0 for
 	// the first commit), then the CRC-64/XZ of the file ID, the trailer's position
-	// (37), the slot, and the commit ID
+	// (32), the slot, and the commit ID
 	{
 		b := readCommittedBytes(t, source, 0)
-		assertEqual(t, 62, len(b))
+		assertEqual(t, 57, len(b))
 		if !bytes.Equal([]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}, b[12:20]) {
 			t.Fatalf("unexpected file ID bytes: %x", b[12:20])
 		}
 		if !bytes.Equal([]byte{
 			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-			0x00, 0xd6, 0x18, 0x4e, 0x46, 0xb4, 0x7d, 0x29,
-			0x26,
-		}, b[37:]) {
-			t.Fatalf("unexpected trailer bytes: %x", b[37:])
+			0x00, 0x95, 0xd4, 0x94, 0xc3, 0x4d, 0xf8, 0x07,
+			0xe5,
+		}, b[32:]) {
+			t.Fatalf("unexpected trailer bytes: %x", b[32:])
 		}
 	}
 
