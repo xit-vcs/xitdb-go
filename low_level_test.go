@@ -105,9 +105,10 @@ func TestFrozenWriters(t *testing.T) {
 	appended, err := history.AppendCursor()
 	check(err)
 	assertEqual(t, TagNone, mustSlot(t, appended).Tag)
+	// the cleared slot still counts as an element
 	slot, err = history.GetSlot(-1)
 	check(err)
-	assertEqual(t, Slot{}, slot)
+	assertEqual(t, Slot{Full: true}, slot)
 	func() {
 		defer func() { assertEqual(t, any(rollback), recover()) }()
 		check(history.AppendContext(NewBytes(make([]byte, 16)), func(cursor *WriteCursor) error {

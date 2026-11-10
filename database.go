@@ -1822,7 +1822,8 @@ func (db *Database) readArrayListSlotAppend(header ArrayListHeader, writeMode Wr
 	if err != nil {
 		return ArrayListAppendResult{}, err
 	}
-	// clear values left by a rollback or slice
+	// clear values left by a rollback or slice. the slot is written as a none
+	// slot marked full, so it counts as an element even if nothing is written to it.
 	slotPtr = slotPtr.WithSlot(Slot{})
 	if slotPtr.Position == nil {
 		return ArrayListAppendResult{}, ErrCursorNotWriteable
@@ -1830,7 +1831,7 @@ func (db *Database) readArrayListSlotAppend(header ArrayListHeader, writeMode Wr
 	if err := db.Core.SeekTo(*slotPtr.Position); err != nil {
 		return ArrayListAppendResult{}, err
 	}
-	b := slotPtr.Slot.ToBytes()
+	b := Slot{Full: true}.ToBytes()
 	if err := db.Core.Write(b[:]); err != nil {
 		return ArrayListAppendResult{}, err
 	}
