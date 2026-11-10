@@ -90,38 +90,25 @@ func (h Header) ToBytes() [HeaderLength]byte {
 	return buf
 }
 
-func ReadHeader(c Core) (Header, error) {
+func HeaderFromBytes(b [HeaderLength]byte) Header {
 	var magicNumber [3]byte
-	if err := c.Read(magicNumber[:]); err != nil {
-		return Header{}, err
-	}
-	// currently unused padding
-	if _, err := readByte(c); err != nil {
-		return Header{}, err
-	}
-	version, err := readUint16(c)
-	if err != nil {
-		return Header{}, err
-	}
-	hashSize, err := readUint16(c)
-	if err != nil {
-		return Header{}, err
-	}
-	hashID, err := readUint32(c)
-	if err != nil {
-		return Header{}, err
-	}
-	fileID, err := readLong(c)
-	if err != nil {
-		return Header{}, err
-	}
+	copy(magicNumber[:], b[0:3])
+	// b[3] is currently unused padding
 	return Header{
-		FileID:      uint64(fileID),
-		HashID:      hashID,
-		HashSize:    hashSize,
-		Version:     version,
+		FileID:      binary.BigEndian.Uint64(b[12:20]),
+		HashID:      binary.BigEndian.Uint32(b[8:12]),
+		HashSize:    binary.BigEndian.Uint16(b[6:8]),
+		Version:     binary.BigEndian.Uint16(b[4:6]),
 		MagicNumber: magicNumber,
-	}, nil
+	}
+}
+
+func ReadHeader(c Core) (Header, error) {
+	var b [HeaderLength]byte
+	if err := c.Read(b[:]); err != nil {
+		return Header{}, err
+	}
+	return HeaderFromBytes(b), nil
 }
 
 func (h Header) Write(c Core) error {
@@ -602,6 +589,33 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 		return nil, fmt.Errorf("length: %w", err)
 	}
 
+	// a database whose first commit never finished holds nothing. if it is no
+	// bigger than a new database, it was interrupted while being created, so
+	// it is created again. otherwise it is a full copy that was interrupted
+	// (see ApplyReplicated), which is left for the next sync to replace.
+	hasCommit := false
+	if length > 0 {
+		header, err := db.readAndValidateHeader()
+		if err != nil {
+			return nil, err
+		}
+		db.Header = header
+		fileSize, err := db.readFileSize()
+		if err != nil {
+			return nil, fmt.Errorf("read file size: %w", err)
+		}
+		hasCommit = fileSize > 0
+		newSize := fileSizeStart(header.Version) + 8 + RootTrailerLength
+		if !hasCommit && length <= newSize {
+			if err := core.SetLength(0); err != nil {
+				return nil, fmt.Errorf("set length: %w", err)
+			}
+			if length, err = core.Length(); err != nil {
+				return nil, fmt.Errorf("length: %w", err)
+			}
+		}
+	}
+
 	if length == 0 {
 		fileID := hasher.FileID
 		if fileID == 0 {
@@ -618,29 +632,19 @@ func NewDatabase(core Core, hasher Hasher) (*Database, error) {
 			Version:     Version,
 			MagicNumber: MagicNumber,
 		}
-		if err := db.Header.Write(core); err != nil {
-			return nil, fmt.Errorf("write header: %w", err)
+		if err := db.writeHeaders(); err != nil {
+			return nil, fmt.Errorf("write headers: %w", err)
 		}
-		// write the root header and commit an empty root, so the
-		// file ends with a trailer like after any transaction
-		var rootHeader [alignedFileSizeStart + 8 - RootHeaderStart]byte
-		if err := core.Write(rootHeader[:]); err != nil {
-			return nil, fmt.Errorf("write root header: %w", err)
-		}
-		// the first commit's ID is 0, so a new database's bytes only
-		// depend on its file ID
+		// commit an empty root, so the file ends with a trailer like after
+		// any transaction. the first commit's ID is 0, so a new database's
+		// bytes only depend on its file ID
 		if err := db.commitRoot(Slot{}, 0); err != nil {
 			return nil, fmt.Errorf("commit root: %w", err)
 		}
 		if err := core.Sync(); err != nil {
 			return nil, fmt.Errorf("sync: %w", err)
 		}
-	} else {
-		header, err := db.readAndValidateHeader()
-		if err != nil {
-			return nil, err
-		}
-		db.Header = header
+	} else if hasCommit {
 		if _, err := db.CommittedSize(); err != nil {
 			return nil, fmt.Errorf("validate committed size: %w", err)
 		}
@@ -664,13 +668,20 @@ func (db *Database) readAndValidateHeader() (Header, error) {
 	if err != nil {
 		return Header{}, fmt.Errorf("read header: %w", err)
 	}
-	if err := header.Validate(); err != nil {
-		return Header{}, fmt.Errorf("validate header: %w", err)
-	}
-	if header.HashSize != uint16(db.newHash().Size()) {
-		return Header{}, ErrInvalidHashSize
+	if err := db.validateHeader(header); err != nil {
+		return Header{}, err
 	}
 	return header, nil
+}
+
+func (db *Database) validateHeader(header Header) error {
+	if err := header.Validate(); err != nil {
+		return fmt.Errorf("validate header: %w", err)
+	}
+	if header.HashSize != uint16(db.newHash().Size()) {
+		return ErrInvalidHashSize
+	}
+	return nil
 }
 
 func (db *Database) RootCursor() *WriteCursor {
@@ -714,6 +725,14 @@ func (db *Database) Freeze() error {
 
 // this database's ReplicaState.
 func (db *Database) ReplicaState() (ReplicaState, error) {
+	// a full copy that didn't finish has no first commit (see ApplyReplicated)
+	fileSize, err := db.readFileSize()
+	if err != nil {
+		return ReplicaState{}, err
+	}
+	if fileSize == 0 {
+		return ReplicaState{}, nil
+	}
 	committedSize, err := db.CommittedSize()
 	if err != nil {
 		return ReplicaState{}, err
@@ -762,7 +781,7 @@ func (db *Database) ReadCommitted(start, end int64, w io.Writer) error {
 	if start < 0 || start > end || end > committedSize {
 		return ErrInvalidRange
 	}
-	fileSizeStart := db.fileSizeStart()
+	fileSizeStart := fileSizeStart(db.Header.Version)
 	dataStart := fileSizeStart + 8
 	if start > 0 && start < dataStart {
 		return ErrInvalidRange
@@ -809,8 +828,40 @@ func (db *Database) streamBytes(w io.Writer, start, length int64) error {
 // database is replaced by them; otherwise start must be this database's
 // CommittedSize.
 func (db *Database) ApplyReplicated(start int64, r io.Reader, length int64) error {
+	position := start
 	if start == 0 {
+		// the bytes are a different database, with its own header. its root header
+		// stays empty until the rest has arrived, so a copy that doesn't finish is
+		// a database without a first commit (see NewDatabase), which the next sync replaces.
+		if length < HeaderLength {
+			return ErrInvalidRange
+		}
+		var b [HeaderLength]byte
+		if _, err := io.ReadFull(r, b[:]); err != nil {
+			return err
+		}
+		header := HeaderFromBytes(b)
+		if err := db.validateHeader(header); err != nil {
+			return err
+		}
+		position = fileSizeStart(header.Version) + 8
+		if length < position {
+			return ErrInvalidRange
+		}
 		if err := db.Core.SetLength(0); err != nil {
+			return err
+		}
+		db.Header = header
+		if err := db.writeHeaders(); err != nil {
+			return err
+		}
+		// sync the headers before the data, which could otherwise reach
+		// the disk without them and leave a file that can't be opened
+		if err := db.Core.Sync(); err != nil {
+			return err
+		}
+		// the root header that came with the bytes isn't needed
+		if _, err := io.CopyN(io.Discard, r, position-HeaderLength); err != nil {
 			return err
 		}
 	} else {
@@ -827,11 +878,11 @@ func (db *Database) ApplyReplicated(start int64, r io.Reader, length int64) erro
 		}
 	}
 
-	if err := db.Core.SeekTo(start); err != nil {
+	if err := db.Core.SeekTo(position); err != nil {
 		return err
 	}
 	buf := make([]byte, min(max(length, 0), 4096))
-	for remaining := length; remaining > 0; {
+	for remaining := start + length - position; remaining > 0; {
 		chunk := min(remaining, int64(len(buf)))
 		if _, err := io.ReadFull(r, buf[:chunk]); err != nil {
 			return err
@@ -842,20 +893,7 @@ func (db *Database) ApplyReplicated(start int64, r io.Reader, length int64) erro
 		remaining -= chunk
 	}
 
-	if start == 0 {
-		// the bytes are a different database, with its own header
-		if err := db.Core.Sync(); err != nil {
-			return err
-		}
-		header, err := db.readAndValidateHeader()
-		if err != nil {
-			return err
-		}
-		db.Header = header
-		if _, err := db.CommittedSize(); err != nil {
-			return err
-		}
-	} else if length > 0 {
+	if length > 0 {
 		// the bytes must end with a trailer. update the root header to match it.
 		if _, err := db.readRootTrailer(start + length); err != nil {
 			return err
@@ -1013,16 +1051,51 @@ func (db *Database) truncate() error {
 
 // where the root header's file size is. the committed data starts after it.
 // version 1 has a copy of the root slot before it, which isn't used or updated.
-func (db *Database) fileSizeStart() int64 {
-	if db.Header.Version == 1 {
+func fileSizeStart(version uint16) int64 {
+	if version == 1 {
 		return RootHeaderStart + SlotLength
 	}
 	return alignedFileSizeStart
 }
 
+// writes the database header and an empty root header. the database has
+// no first commit until the root header is given its file size.
+func (db *Database) writeHeaders() error {
+	if err := db.Core.SeekTo(0); err != nil {
+		return err
+	}
+	if err := db.Header.Write(db.Core); err != nil {
+		return err
+	}
+	// version 1's root header is the biggest
+	var rootHeader [SlotLength + 8]byte
+	return db.Core.Write(rootHeader[:fileSizeStart(db.Header.Version)+8-RootHeaderStart])
+}
+
+// the root header's file size. it is 0 until the first commit or full copy
+// has finished, including when the file was cut off before it.
+func (db *Database) readFileSize() (int64, error) {
+	fileSizeStart := fileSizeStart(db.Header.Version)
+	length, err := db.Core.Length()
+	if err != nil {
+		return 0, err
+	}
+	if length < fileSizeStart+8 {
+		return 0, nil
+	}
+	if err := db.Core.SeekTo(fileSizeStart); err != nil {
+		return 0, err
+	}
+	var b [8]byte
+	if err := db.Core.Read(b[:]); err != nil {
+		return 0, err
+	}
+	return int64(binary.BigEndian.Uint64(b[:])), nil
+}
+
 // the file size from the root header, and the root slot from the trailer it points to
 func (db *Database) readRootHeader() (RootHeader, error) {
-	fileSizeStart := db.fileSizeStart()
+	fileSizeStart := fileSizeStart(db.Header.Version)
 	if err := db.Core.SeekTo(fileSizeStart); err != nil {
 		return RootHeader{}, err
 	}
@@ -1125,7 +1198,7 @@ func (db *Database) writeRootHeader() error {
 	if err != nil {
 		return err
 	}
-	if err := db.Core.SeekTo(db.fileSizeStart()); err != nil {
+	if err := db.Core.SeekTo(fileSizeStart(db.Header.Version)); err != nil {
 		return err
 	}
 	var b [8]byte
