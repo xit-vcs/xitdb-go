@@ -220,9 +220,15 @@ func (c *ReadCursor) ReadKeyValuePair() (*ReadKVPairCursor, error) {
 		return nil, err
 	}
 
+	// a key-only entry is its own key slot, so its key is where the entry is
+	keyPosition := c.DB.kvKeyPosition(slotPtr.Slot)
+	if keyPosition == nil {
+		keyPosition = slotPtr.Position
+	}
+
 	return &ReadKVPairCursor{
 		ValueCursor: &ReadCursor{SlotPtr: SlotPointer{Position: c.DB.kvValuePosition(slotPtr.Slot), Slot: kvPair.ValueSlot}, DB: c.DB},
-		KeyCursor:   &ReadCursor{SlotPtr: SlotPointer{Position: c.DB.kvKeyPosition(slotPtr.Slot), Slot: kvPair.KeySlot}, DB: c.DB},
+		KeyCursor:   &ReadCursor{SlotPtr: SlotPointer{Position: keyPosition, Slot: kvPair.KeySlot}, DB: c.DB},
 		Hash:        kvPair.Hash,
 	}, nil
 }
