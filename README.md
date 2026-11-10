@@ -1203,3 +1203,5 @@ Only change a replica with `ApplyReplicated`. If you write to it directly, it no
 ## Thread Safety
 
 It is possible to read the database from multiple threads/goroutines without locks, even while writes are happening. This is a big benefit of immutable databases. However, each thread needs to use its own `Database` instance. See [the multithreading test](https://github.com/xit-vcs/xitdb-go/blob/22c320fd08cd482ebf9fcfcb45e4bafb19e2a84e/high_level_test.go#L555) for an example of this. Also, keep in mind that writes still need to come from one thread at a time; see the example at the top of this file, where it acquires an exclusive file lock.
+
+When a thread or process only reads, open its file in read-only mode, such as with `os.Open`. Otherwise, creating its `Database` could write to the file: an empty file becomes a new database, and so does one whose creation was interrupted. That must not happen while another process is creating the database, or replacing it with `ApplyReplicated`.
