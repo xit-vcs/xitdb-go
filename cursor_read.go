@@ -698,6 +698,9 @@ func sortedStackFromIndex(cursor *ReadCursor, rootPtr int64, startIndex int64) (
 		}
 		position := nodePtr + BTreeNodeHeaderSize
 		if node.Kind == BTreeKindLeaf {
+			if rem >= int64(node.Num) {
+				return nil, ErrInvalidBTreeNode
+			}
 			stack = append(stack, iterLevel{position: position, block: node.Entries, index: byte(rem)})
 			return stack, nil
 		}
@@ -748,6 +751,9 @@ func btreeStackFromIndex(cursor *ReadCursor, rootPtr int64, startIndex int64) ([
 		}
 		position := nodePtr + BTreeNodeHeaderSize
 		if node.Kind == BTreeKindLeaf {
+			if rem >= int64(node.Num) {
+				return nil, ErrInvalidBTreeNode
+			}
 			stack = append(stack, iterLevel{position: position, block: node.Values, index: byte(rem)})
 			return stack, nil
 		}

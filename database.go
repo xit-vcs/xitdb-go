@@ -2170,6 +2170,9 @@ func (db *Database) btreeInsert(nodePtr, rank, frozenAt int64) (BTreeInsertResul
 	}
 	switch node.Kind {
 	case BTreeKindLeaf:
+		if rank > int64(node.Num) {
+			return BTreeInsertResult{}, ErrInvalidBTreeNode
+		}
 		// build the entries with a placeholder spliced in at `rank`. the placeholder is
 		// a NONE slot marked full so that, if the caller never writes a value (e.g.
 		// appendCursor), iteration still counts it as an element rather than skipping it
@@ -2295,6 +2298,9 @@ func (db *Database) btreeGetForWrite(nodePtr, rank, frozenAt int64) (BTreeWriteS
 		return BTreeWriteSlot{}, err
 	}
 	if node.Kind == BTreeKindLeaf {
+		if rank >= int64(node.Num) {
+			return BTreeWriteSlot{}, ErrInvalidBTreeNode
+		}
 		newPtr := nodePtr
 		if !db.btreeReusable(nodePtr, frozenAt) {
 			newPtr, err = db.writeBTreeNode(node)
@@ -2338,6 +2344,9 @@ func (db *Database) btreeRemove(nodePtr, rank, frozenAt int64) (BTreeNode, error
 	}
 	switch node.Kind {
 	case BTreeKindLeaf:
+		if rank >= int64(node.Num) {
+			return BTreeNode{}, ErrInvalidBTreeNode
+		}
 		r := int(rank)
 		copy(node.Values[r:node.Num-1], node.Values[r+1:node.Num])
 		node.Num--
@@ -2650,6 +2659,9 @@ func (db *Database) btreeSplit(rootPtr, rank int64) (BTreeSplitResult, error) {
 		return BTreeSplitResult{}, err
 	}
 	if node.Kind == BTreeKindLeaf {
+		if rank > int64(node.Num) {
+			return BTreeSplitResult{}, ErrInvalidBTreeNode
+		}
 		r := int(rank)
 		left := BTreeNode{Kind: BTreeKindLeaf, Num: r}
 		copy(left.Values[:r], node.Values[:r])
