@@ -103,14 +103,6 @@ func (c *CoreBufferedFile) Write(p []byte) error {
 		c.memoryPos = c.filePos
 	}
 
-	if c.fileLen == nil {
-		fileLen, err := c.statLength()
-		if err != nil {
-			return err
-		}
-		c.fileLen = &fileLen
-	}
-
 	if c.filePos >= c.memoryPos && c.filePos-c.memoryPos+n <= int64(c.bufferSize) {
 		// write to the in-memory buffer
 		if err := c.memory.SeekTo(c.filePos - c.memoryPos); err != nil {
@@ -130,6 +122,16 @@ func (c *CoreBufferedFile) Write(p []byte) error {
 		if err := c.writeToFile(c.filePos, p); err != nil {
 			return err
 		}
+	}
+
+	// cache the file's length only after a successful write. a failed
+	// one may leave nothing to flush, so nothing would clear it.
+	if c.fileLen == nil {
+		fileLen, err := c.statLength()
+		if err != nil {
+			return err
+		}
+		c.fileLen = &fileLen
 	}
 
 	c.filePos += n
