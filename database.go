@@ -40,6 +40,9 @@ const (
 	Mask            int64  = SlotCount - 1
 	IndexBlockSize         = SlotLength * SlotCount
 	MaxBranchLength        = 16
+	// a b-tree's height is at most log2 of a 64-bit size = 64, given the
+	// minimum fan-out of 2
+	MaxBTreeDepth = 64
 	// b-tree (backs LinkedArrayList): nodes hold up to BTreeSlotCount entries
 	BTreeSlotCount       = SlotCount
 	BTreeSplitCount      = (BTreeSlotCount + 1) / 2
@@ -2106,7 +2109,7 @@ func (db *Database) descendByRank(rootPtr, rank int64, branchBlockSize int) (Slo
 	}
 	nodePtr := rootPtr
 	rem := rank
-	for {
+	for range MaxBTreeDepth {
 		// a leaf may be at the end of the db, so there may not be a whole branch's
 		// worth of bytes to read
 		size := int(min(int64(branchBlockSize), length-nodePtr))
@@ -2159,11 +2162,15 @@ func (db *Database) descendByRank(rootPtr, rank int64, branchBlockSize int) (Slo
 		}
 		nodePtr = slot.Value
 	}
+	return SlotPointer{}, ErrInvalidBTreeNode
 }
 
 // insert a placeholder slot at `rank` within the subtree at nodePtr, writing new nodes
 // along the path. the caller fills in the value at the returned ValuePosition.
-func (db *Database) btreeInsert(nodePtr, rank, frozenAt int64) (BTreeInsertResult, error) {
+func (db *Database) btreeInsert(nodePtr, rank, frozenAt int64, depth int) (BTreeInsertResult, error) {
+	if depth >= MaxBTreeDepth {
+		return BTreeInsertResult{}, ErrInvalidBTreeNode
+	}
 	node, err := db.readBTreeNode(nodePtr)
 	if err != nil {
 		return BTreeInsertResult{}, err
@@ -2224,7 +2231,7 @@ func (db *Database) btreeInsert(nodePtr, rank, frozenAt int64) (BTreeInsertResul
 			rem -= node.Counts[i]
 			i++
 		}
-		child, err := db.btreeInsert(node.Children[i].Value, rem, frozenAt)
+		child, err := db.btreeInsert(node.Children[i].Value, rem, frozenAt, depth+1)
 		if err != nil {
 			return BTreeInsertResult{}, err
 		}
@@ -2292,7 +2299,10 @@ func (db *Database) btreeGrowRoot(result BTreeInsertResult) (int64, error) {
 // belong to a past transaction. the element count is unchanged, so when the whole path
 // is already this-transaction nothing is rewritten and the caller writes straight into
 // the existing leaf.
-func (db *Database) btreeGetForWrite(nodePtr, rank, frozenAt int64) (BTreeWriteSlot, error) {
+func (db *Database) btreeGetForWrite(nodePtr, rank, frozenAt int64, depth int) (BTreeWriteSlot, error) {
+	if depth >= MaxBTreeDepth {
+		return BTreeWriteSlot{}, ErrInvalidBTreeNode
+	}
 	node, err := db.readBTreeNode(nodePtr)
 	if err != nil {
 		return BTreeWriteSlot{}, err
@@ -2317,7 +2327,7 @@ func (db *Database) btreeGetForWrite(nodePtr, rank, frozenAt int64) (BTreeWriteS
 		i++
 	}
 	childPtr := node.Children[i].Value
-	child, err := db.btreeGetForWrite(childPtr, rem, frozenAt)
+	child, err := db.btreeGetForWrite(childPtr, rem, frozenAt, depth+1)
 	if err != nil {
 		return BTreeWriteSlot{}, err
 	}
@@ -2337,7 +2347,10 @@ func (db *Database) btreeGetForWrite(nodePtr, rank, frozenAt int64) (BTreeWriteS
 // behind for the caller to write. an emptied child is dropped and a child left under
 // half full is merged with a neighbor it fits with, so every leaf stays at the same
 // depth.
-func (db *Database) btreeRemove(nodePtr, rank, frozenAt int64) (BTreeNode, error) {
+func (db *Database) btreeRemove(nodePtr, rank, frozenAt int64, depth int) (BTreeNode, error) {
+	if depth >= MaxBTreeDepth {
+		return BTreeNode{}, ErrInvalidBTreeNode
+	}
 	node, err := db.readBTreeNode(nodePtr)
 	if err != nil {
 		return BTreeNode{}, err
@@ -2359,7 +2372,7 @@ func (db *Database) btreeRemove(nodePtr, rank, frozenAt int64) (BTreeNode, error
 			i++
 		}
 		childPtr := node.Children[i].Value
-		child, err := db.btreeRemove(childPtr, rem, frozenAt)
+		child, err := db.btreeRemove(childPtr, rem, frozenAt, depth+1)
 		if err != nil {
 			return BTreeNode{}, err
 		}
@@ -2425,7 +2438,7 @@ func btreeConcatNodes(a, b BTreeNode) BTreeNode {
 func (db *Database) btreeHeight(rootPtr int64) (int, error) {
 	ptr := rootPtr
 	height := 0
-	for {
+	for range MaxBTreeDepth {
 		node, err := db.readBTreeNode(ptr)
 		if err != nil {
 			return 0, err
@@ -2436,6 +2449,7 @@ func (db *Database) btreeHeight(rootPtr int64) (int, error) {
 		height++
 		ptr = node.Children[0].Value
 	}
+	return 0, ErrInvalidBTreeNode
 }
 
 func (db *Database) btreeMakeRoot(result BTreeJoinResult) (int64, error) {
@@ -2653,7 +2667,10 @@ func (db *Database) btreeSubtree(children []Slot, counts []int64, start, length 
 	return res.NodePtr, nil
 }
 
-func (db *Database) btreeSplit(rootPtr, rank int64) (BTreeSplitResult, error) {
+func (db *Database) btreeSplit(rootPtr, rank int64, depth int) (BTreeSplitResult, error) {
+	if depth >= MaxBTreeDepth {
+		return BTreeSplitResult{}, ErrInvalidBTreeNode
+	}
 	node, err := db.readBTreeNode(rootPtr)
 	if err != nil {
 		return BTreeSplitResult{}, err
@@ -2683,7 +2700,7 @@ func (db *Database) btreeSplit(rootPtr, rank int64) (BTreeSplitResult, error) {
 		rem -= node.Counts[i]
 		i++
 	}
-	child, err := db.btreeSplit(node.Children[i].Value, rem)
+	child, err := db.btreeSplit(node.Children[i].Value, rem, depth+1)
 	if err != nil {
 		return BTreeSplitResult{}, err
 	}
@@ -2944,7 +2961,7 @@ func (db *Database) sortedLeafSearch(node *SortedNode, key []byte) (int, bool, e
 // descend by key to the matching leaf entry, or nil
 func (db *Database) sortedGet(rootPtr int64, key []byte) (*Slot, error) {
 	nodePtr := rootPtr
-	for {
+	for range MaxBTreeDepth {
 		node, err := db.readSortedNode(nodePtr)
 		if err != nil {
 			return nil, err
@@ -2966,13 +2983,14 @@ func (db *Database) sortedGet(rootPtr int64, key []byte) (*Slot, error) {
 		}
 		nodePtr = node.Children[i].Value
 	}
+	return nil, ErrInvalidBTreeNode
 }
 
 // number of keys strictly less than key (the inverse of getByIndex)
 func (db *Database) sortedRank(rootPtr int64, key []byte) (int64, error) {
 	nodePtr := rootPtr
 	var rank int64
-	for {
+	for range MaxBTreeDepth {
 		node, err := db.readSortedNode(nodePtr)
 		if err != nil {
 			return 0, err
@@ -2993,6 +3011,7 @@ func (db *Database) sortedRank(rootPtr int64, key []byte) (int64, error) {
 		}
 		nodePtr = node.Children[i].Value
 	}
+	return 0, ErrInvalidBTreeNode
 }
 
 // write a byte key as a short_bytes (inline, <=8 bytes, no interior zero) or external
@@ -3037,7 +3056,10 @@ func (db *Database) writeSortedPair(keySlot Slot) (Slot, error) {
 // value of the returned entry, unless keyOnly is true. in that case, a new key
 // is stored as a key-only entry, and an existing entry is left alone. otherwise,
 // the returned entry is a key-value pair with a writeable value.
-func (db *Database) sortedPut(nodePtr int64, key []byte, keyOnly bool, frozenAt int64) (SortedInsertResult, error) {
+func (db *Database) sortedPut(nodePtr int64, key []byte, keyOnly bool, frozenAt int64, depth int) (SortedInsertResult, error) {
+	if depth >= MaxBTreeDepth {
+		return SortedInsertResult{}, ErrInvalidBTreeNode
+	}
 	node, err := db.readSortedNode(nodePtr)
 	if err != nil {
 		return SortedInsertResult{}, err
@@ -3135,7 +3157,7 @@ func (db *Database) sortedPut(nodePtr int64, key []byte, keyOnly bool, frozenAt 
 		if err != nil {
 			return SortedInsertResult{}, err
 		}
-		child, err := db.sortedPut(node.Children[i].Value, key, keyOnly, frozenAt)
+		child, err := db.sortedPut(node.Children[i].Value, key, keyOnly, frozenAt, depth+1)
 		if err != nil {
 			return SortedInsertResult{}, err
 		}
@@ -3208,7 +3230,10 @@ func (db *Database) sortedPut(nodePtr int64, key []byte, keyOnly bool, frozenAt 
 
 // remove key from the subtree at nodePtr, path-copying nodes and decrementing counts.
 // an emptied leaf is left in place (see SortedRemoveResult).
-func (db *Database) sortedRemove(nodePtr int64, key []byte, frozenAt int64) (SortedRemoveResult, error) {
+func (db *Database) sortedRemove(nodePtr int64, key []byte, frozenAt int64, depth int) (SortedRemoveResult, error) {
+	if depth >= MaxBTreeDepth {
+		return SortedRemoveResult{}, ErrInvalidBTreeNode
+	}
 	node, err := db.readSortedNode(nodePtr)
 	if err != nil {
 		return SortedRemoveResult{}, err
@@ -3235,7 +3260,7 @@ func (db *Database) sortedRemove(nodePtr int64, key []byte, frozenAt int64) (Sor
 		if err != nil {
 			return SortedRemoveResult{}, err
 		}
-		child, err := db.sortedRemove(node.Children[i].Value, key, frozenAt)
+		child, err := db.sortedRemove(node.Children[i].Value, key, frozenAt, depth+1)
 		if err != nil {
 			return SortedRemoveResult{}, err
 		}

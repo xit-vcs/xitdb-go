@@ -412,7 +412,7 @@ func (p LinkedArrayListGet) readSlotPointer(db *Database, writeMode WriteMode, p
 	}
 
 	// path-copy down to the value slot so the write is persistent
-	writeSlot, err := db.btreeGetForWrite(header.RootPtr, rank, frozenAt)
+	writeSlot, err := db.btreeGetForWrite(header.RootPtr, rank, frozenAt, 0)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -460,7 +460,7 @@ func (p LinkedArrayListAppend) readSlotPointer(db *Database, writeMode WriteMode
 		return SlotPointer{}, err
 	}
 
-	result, err := db.btreeInsert(header.RootPtr, header.Size, frozenAt)
+	result, err := db.btreeInsert(header.RootPtr, header.Size, frozenAt, 0)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -523,11 +523,11 @@ func (p LinkedArrayListSlicePart) readSlotPointer(db *Database, writeMode WriteM
 	}
 
 	// slice = drop [0, offset) then keep [0, size) of what's left
-	afterOffset, err := db.btreeSplit(header.RootPtr, p.Offset)
+	afterOffset, err := db.btreeSplit(header.RootPtr, p.Offset, 0)
 	if err != nil {
 		return SlotPointer{}, err
 	}
-	sliced, err := db.btreeSplit(afterOffset.Right, p.Size)
+	sliced, err := db.btreeSplit(afterOffset.Right, p.Size, 0)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -662,7 +662,7 @@ func (p LinkedArrayListInsertPart) readSlotPointer(db *Database, writeMode Write
 		rank = index
 	}
 
-	result, err := db.btreeInsert(header.RootPtr, rank, frozenAt)
+	result, err := db.btreeInsert(header.RootPtr, rank, frozenAt, 0)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -735,7 +735,7 @@ func (p LinkedArrayListRemovePart) readSlotPointer(db *Database, writeMode Write
 			return SlotPointer{}, err
 		}
 	} else {
-		root, err := db.btreeRemove(header.RootPtr, rank, frozenAt)
+		root, err := db.btreeRemove(header.RootPtr, rank, frozenAt, 0)
 		if err != nil {
 			return SlotPointer{}, err
 		}
@@ -1172,7 +1172,7 @@ func (p SortedMapGetPart) readSlotPointer(db *Database, writeMode WriteMode, pat
 	// only a set that is just touching the key can leave out the value
 	_, targetsKey := p.Target.(SortedMapGetKey)
 	keyOnly := slotPtr.Slot.Tag == TagSortedSet && targetsKey
-	result, err := db.sortedPut(header.RootPtr, key, keyOnly, frozenAt)
+	result, err := db.sortedPut(header.RootPtr, key, keyOnly, frozenAt, 0)
 	if err != nil {
 		return SlotPointer{}, err
 	}
@@ -1291,7 +1291,7 @@ func (p SortedMapRemovePart) readSlotPointer(db *Database, writeMode WriteMode, 
 		return SlotPointer{}, err
 	}
 
-	result, err := db.sortedRemove(header.RootPtr, p.Key, frozenAt)
+	result, err := db.sortedRemove(header.RootPtr, p.Key, frozenAt, 0)
 	if err != nil {
 		return SlotPointer{}, err
 	}

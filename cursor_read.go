@@ -574,6 +574,12 @@ func (it *CursorIterator) nextInternal(nodeOffset int64) (*ReadCursor, error) {
 
 		nextSlot := level.block[level.index]
 		if nextSlot.Tag == TagIndex {
+			// the iterator pushes one stack level per tree level. the deepest
+			// iterable structure is the hash trie (HashSize*8/BitCount levels) or
+			// a b-tree; the array list's radix trie is shallower than both.
+			if len(it.stack) >= max(int(it.cursor.DB.Header.HashSize)*8/BitCount, MaxBTreeDepth) {
+				return nil, ErrIteratorStackOverflow
+			}
 			// nodeOffset skips a b-tree node's kind+num header
 			nextPos := nextSlot.Value + nodeOffset
 			block, err := readSlotBlock(it.cursor, nextPos)
@@ -691,7 +697,7 @@ func sortedStackFromIndex(cursor *ReadCursor, rootPtr int64, startIndex int64) (
 	var stack []iterLevel
 	nodePtr := rootPtr
 	rem := startIndex
-	for {
+	for range MaxBTreeDepth {
 		node, err := cursor.DB.readSortedNode(nodePtr)
 		if err != nil {
 			return nil, err
@@ -712,6 +718,7 @@ func sortedStackFromIndex(cursor *ReadCursor, rootPtr int64, startIndex int64) (
 		stack = append(stack, iterLevel{position: position, block: node.Children, index: byte(i)})
 		nodePtr = node.Children[i].Value
 	}
+	return nil, ErrInvalidBTreeNode
 }
 
 // descend the array-list radix trie to startIndex, pushing one iterLevel per
@@ -744,7 +751,7 @@ func btreeStackFromIndex(cursor *ReadCursor, rootPtr int64, startIndex int64) ([
 	var stack []iterLevel
 	nodePtr := rootPtr
 	rem := startIndex
-	for {
+	for range MaxBTreeDepth {
 		node, err := cursor.DB.readBTreeNode(nodePtr)
 		if err != nil {
 			return nil, err
@@ -765,13 +772,14 @@ func btreeStackFromIndex(cursor *ReadCursor, rootPtr int64, startIndex int64) ([
 		stack = append(stack, iterLevel{position: position, block: node.Children, index: byte(i)})
 		nodePtr = node.Children[i].Value
 	}
+	return nil, ErrInvalidBTreeNode
 }
 
 func sortedStackFromKey(cursor *ReadCursor, rootPtr int64, key []byte) ([]iterLevel, int64, error) {
 	var stack []iterLevel
 	nodePtr := rootPtr
 	var before int64
-	for {
+	for range MaxBTreeDepth {
 		node, err := cursor.DB.readSortedNode(nodePtr)
 		if err != nil {
 			return nil, 0, err
@@ -796,6 +804,7 @@ func sortedStackFromKey(cursor *ReadCursor, rootPtr int64, key []byte) ([]iterLe
 		stack = append(stack, iterLevel{position: position, block: node.Children, index: byte(i)})
 		nodePtr = node.Children[i].Value
 	}
+	return nil, 0, ErrInvalidBTreeNode
 }
 
 // start a sorted-map iterator at the entry with rank startIndex (the count descent),
