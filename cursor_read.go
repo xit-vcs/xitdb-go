@@ -613,7 +613,6 @@ func (c *ReadCursor) All() iter.Seq2[*ReadCursor, error] {
 			return
 		case TagArrayList:
 			for it.index < it.size {
-				it.index++
 				cursor, err := it.nextInternal(0)
 				if err != nil {
 					if !yield(nil, err) {
@@ -621,6 +620,7 @@ func (c *ReadCursor) All() iter.Seq2[*ReadCursor, error] {
 					}
 					return
 				}
+				it.index++
 				if cursor != nil {
 					if !yield(cursor, nil) {
 						return
@@ -629,7 +629,6 @@ func (c *ReadCursor) All() iter.Seq2[*ReadCursor, error] {
 			}
 		case TagLinkedArrayList, TagSortedMap, TagSortedSet:
 			for it.index < it.size {
-				it.index++
 				// b-tree nodes have a kind+num header before their slots, so child
 				// pointers are offset by BTreeNodeHeaderSize
 				cursor, err := it.nextInternal(BTreeNodeHeaderSize)
@@ -639,6 +638,7 @@ func (c *ReadCursor) All() iter.Seq2[*ReadCursor, error] {
 					}
 					return
 				}
+				it.index++
 				if cursor != nil {
 					if !yield(cursor, nil) {
 						return
@@ -981,12 +981,12 @@ func iterSeqFrom(newIt func() (*CursorIterator, error), nodeOffset int64) iter.S
 			return
 		}
 		for it.index < it.size {
-			it.index++
 			cursor, err := it.nextInternal(nodeOffset)
 			if err != nil {
 				yield(nil, err)
 				return
 			}
+			it.index++
 			if cursor != nil {
 				if !yield(cursor, nil) {
 					return
